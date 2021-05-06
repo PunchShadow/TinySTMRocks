@@ -134,6 +134,17 @@ static inline int rand_range(int n, unsigned short *seed)
   return v;
 }
 
+
+// Added by yuweitt 2021/05/04
+// You can define your own policy struct here
+typedef char POLICY[6];
+
+typedef struct CM_thread_data{
+	thread_data (*thread_data_ptr);
+	POLICY Policy;
+} CM_thread_data;
+
+
 typedef struct thread_data {
   struct intset *set;
   struct barrier *barrier;
@@ -165,6 +176,7 @@ typedef struct thread_data {
   int unit_tx;
 #endif /* LINKEDLIST */
   char padding[64];
+  POLICY *policy_ptr;
 } thread_data_t;
 
 #if defined(USE_LINKEDLIST)
@@ -1216,6 +1228,15 @@ static void barrier_cross(barrier_t *b)
 }
 
 /* ################################################################### *
+ * Contention Manager
+ * ################################################################### */
+static void *CM(void *cm_data){
+  CM_thread_data *d = (CM_thread_data*) cm_data;
+}
+
+
+
+/* ################################################################### *
  * STRESS TEST
  * ################################################################### */
 
@@ -1326,8 +1347,10 @@ int main(int argc, char **argv)
     locked_reads_ok, locked_reads_failed, max_retries;
   stm_ab_stats_t ab_stats;
 #endif /* ! TM_COMPILER */
+  CM_thread_data *cm_data;
   thread_data_t *data;
   pthread_t *threads;
+  pthread_t *cm_thread;
   pthread_attr_t attr;
   barrier_t barrier;
   struct timeval start, end;
@@ -1496,6 +1519,17 @@ int main(int argc, char **argv)
     exit(1);
   }
 
+  // Added by yuweitt
+  if ((cm_data = (CM_thread_data *)malloc(sizeof(CM_thread_data))) == NULL) {
+    perror("malloc");
+    exit(1);
+  }
+  if ((cm_thread = (pthread_t*)malloc(sizeof(pthread_t))) == NULL) {
+    perror("malloc");
+    exit(1);
+  }
+  
+
   if (seed == 0)
     srand((int)time(NULL));
   else
@@ -1539,8 +1573,20 @@ int main(int argc, char **argv)
   barrier_init(&barrier, nb_threads + 1);
   pthread_attr_init(&attr);
   pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
+
+  cm_data->thread_data_ptr = data;
+  cm_data->Policy = "KILL";
+  if (pthread_create(cm_thread, &attr, CM, (void *)(cm_data)) != 0) {
+      fprintf(stderr, "Error creating thread\n");
+      exit(1);
+    }
+
+
   for (i = 0; i < nb_threads; i++) {
     printf("Creating thread %d\n", i);
+    
+    // Added by yuweitt 2021/05/04
+    data[i].policy_ptr = &(cm_data->Policy);
     data[i].range = range;
     data[i].update = update;
     data[i].alternate = alternate;
