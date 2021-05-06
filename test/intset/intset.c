@@ -33,6 +33,7 @@
 #include <stdint.h>
 #include <sys/time.h>
 #include <time.h>
+#include <string.h>
 
 #define RO                              1
 #define RW                              0
@@ -134,15 +135,9 @@ static inline int rand_range(int n, unsigned short *seed)
   return v;
 }
 
-
-// Added by yuweitt 2021/05/04
 // You can define your own policy struct here
 typedef char POLICY[6];
 
-typedef struct CM_thread_data{
-	thread_data (*thread_data_ptr);
-	POLICY Policy;
-} CM_thread_data;
 
 
 typedef struct thread_data {
@@ -178,6 +173,14 @@ typedef struct thread_data {
   char padding[64];
   POLICY *policy_ptr;
 } thread_data_t;
+
+// Added by yuweitt 2021/05/04
+
+
+typedef struct CM_thread_data{
+	thread_data_t (*thread_data_ptr);
+	POLICY Policy;
+} CM_thread_data;
 
 #if defined(USE_LINKEDLIST)
 
@@ -1232,6 +1235,7 @@ static void barrier_cross(barrier_t *b)
  * ################################################################### */
 static void *CM(void *cm_data){
   CM_thread_data *d = (CM_thread_data*) cm_data;
+  return NULL;
 }
 
 
@@ -1575,7 +1579,8 @@ int main(int argc, char **argv)
   pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
 
   cm_data->thread_data_ptr = data;
-  cm_data->Policy = "KILL";
+  strcpy(cm_data->Policy, "KILL");
+
   if (pthread_create(cm_thread, &attr, CM, (void *)(cm_data)) != 0) {
       fprintf(stderr, "Error creating thread\n");
       exit(1);
