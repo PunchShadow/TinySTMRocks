@@ -75,9 +75,9 @@ DEFINES += -DDESIGN=WRITE_BACK_ETL
 ########################################################################
 
 # Pick one contention manager (CM)
-DEFINES += -DCM=CM_SUICIDE
+# DEFINES += -DCM=CM_SUICIDE
 # DEFINES += -DCM=CM_DELAY
-# DEFINES += -DCM=CM_BACKOFF
+DEFINES += -DCM=CM_BACKOFF
 # DEFINES += -DCM=CM_MODULAR
 
 ########################################################################
@@ -94,10 +94,10 @@ DEFINES += -DIRREVOCABLE_ENABLED
 # from disabling them.
 ########################################################################
 
-# DEFINES += -DTM_STATISTICS
-DEFINES += -UTM_STATISTICS
-# DEFINES += -DTM_STATISTICS2
-DEFINES += -UTM_STATISTICS2
+DEFINES += -DTM_STATISTICS
+# DEFINES += -UTM_STATISTICS
+DEFINES += -DTM_STATISTICS2
+# DEFINES += -UTM_STATISTICS2
 
 ########################################################################
 # Prevent duplicate entries in read/write sets when accessing the same
@@ -175,10 +175,10 @@ DEFINES += -ULOCK_IDX_SWAP
 # Output many (DEBUG) or even mode (DEBUG2) debugging messages.
 ########################################################################
 
-# DEFINES += -DDEBUG
-DEFINES += -UDEBUG
-# DEFINES += -DDEBUG2
-DEFINES += -UDEBUG2
+DEFINES += -DDEBUG
+# DEFINES += -UDEBUG
+DEFINES += -DDEBUG2
+# DEFINES += -UDEBUG2
 
 ########################################################################
 # Catch SIGBUS and SIGSEGV signals

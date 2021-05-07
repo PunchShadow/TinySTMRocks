@@ -337,6 +337,7 @@ typedef struct stm_tx {                 /* Transaction descriptor */
 #endif /* CM == CM_DELAY || CM == CM_MODULAR */
 #if CM == CM_BACKOFF
   unsigned long backoff;                /* Maximum backoff duration */
+  int thread_idx;
   unsigned long seed;                   /* RNG seed */
 #endif /* CM == CM_BACKOFF */
 #if CM == CM_MODULAR
@@ -396,8 +397,11 @@ typedef struct {
 #if CM == CM_MODULAR
   int (*contention_manager)(stm_tx_t *, stm_tx_t *, int);
 #endif /* CM == CM_MODULAR */
+  unsigned int delay_time[32];          //TODO modify this thing
   /* At least twice a cache line (256 bytes to be on the safe side) */
   char padding[CACHELINE_SIZE];
+
+
 } ALIGNED global_t;
 
 extern global_t _tinystm;
@@ -455,6 +459,7 @@ stm_quiesce_init(void)
   _tinystm.quiesce = 0;
   _tinystm.threads_nb = 0;
   _tinystm.threads = NULL;
+  memset(_tinystm.delay_time, 0, 32*sizeof(*_tinystm.delay_time)); //TODO
 }
 
 /*
@@ -482,6 +487,8 @@ stm_quiesce_enter_thread(stm_tx_t *tx)
   tx->next = _tinystm.threads;
   _tinystm.threads = tx;
   _tinystm.threads_nb++;
+  _tinystm.delay_time[_tinystm.threads_nb] = MIN_BACKOFF;
+  tx->thread_idx=_tinystm.threads_nb;
   pthread_mutex_unlock(&_tinystm.quiesce_mutex);
 }
 
@@ -1023,15 +1030,10 @@ stm_rollback(stm_tx_t *tx, unsigned int reason)
 
 #if CM == CM_BACKOFF
   /* Simple RNG (good enough for backoff) */
-  tx->seed ^= (tx->seed << 17);
-  tx->seed ^= (tx->seed >> 13);
-  tx->seed ^= (tx->seed << 5);
-  wait = tx->seed % tx->backoff;
+  wait = _tinystm.delay_time[tx->thread_idx];
   for (j = 0; j < wait; j++) {
     /* Do nothing */
   }
-  if (tx->backoff < MAX_BACKOFF)
-    tx->backoff <<= 1;
 #endif /* CM == CM_BACKOFF */
 
 #if CM == CM_DELAY || CM == CM_MODULAR
@@ -1616,4 +1618,3 @@ int_stm_get_specific(stm_tx_t *tx, int key)
 }
 
 #endif /* _STM_INTERNAL_H_ */
-
