@@ -39,8 +39,8 @@ include Makefile.common
 # Refer to [PPoPP-08] for more details.
 ########################################################################
 
-DEFINES += -DDESIGN=WRITE_BACK_ETL
-# DEFINES += -DDESIGN=WRITE_BACK_CTL
+# DEFINES += -DDESIGN=WRITE_BACK_ETL
+DEFINES += -DDESIGN=WRITE_BACK_CTL
 # DEFINES += -DDESIGN=WRITE_THROUGH
 # DEFINES += -DDESIGN=MODULAR
 
@@ -75,7 +75,7 @@ DEFINES += -DDESIGN=WRITE_BACK_ETL
 ########################################################################
 
 # Pick one contention manager (CM)
-DEFINES += -DCM=CM_SUICIDE
+# DEFINES += -DCM=CM_SUICIDE
 # DEFINES += -DCM=CM_DELAY
 # DEFINES += -DCM=CM_BACKOFF
 # DEFINES += -DCM=CM_MODULAR

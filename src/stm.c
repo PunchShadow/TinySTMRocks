@@ -37,7 +37,7 @@
 #include "utils.h"
 #include "atomic.h"
 #include "gc.h"
-
+#include "helper_thread.h" // Helper_thread
 /* ################################################################### *
  * DEFINES
  * ################################################################### */
@@ -273,6 +273,8 @@ stm_init(void)
 
   tls_init();
 
+  helper_thread_init(); // Helper thread
+
 #ifdef SIGNAL_HANDLER
   if (getenv(NO_SIGNAL_HANDLER) == NULL) {
     /* Catch signals for non-faulting load */
@@ -301,6 +303,7 @@ stm_exit(void)
 
   tls_exit();
   stm_quiesce_exit();
+  helper_thread_exit(); // Helper thread
 
 #ifdef EPOCH_GC
   gc_exit();
