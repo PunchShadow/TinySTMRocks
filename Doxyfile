@@ -662,7 +662,8 @@ INPUT                  = include/stm.h \
                          include/mod_log.h \
                          include/mod_mem.h \
                          include/mod_print.h \
-                         include/mod_stats.h
+                         include/mod_stats.h \
+                         include/helper_thread.h
 
 # This tag can be used to specify the character encoding of the source files
 # that doxygen parses. Internally doxygen uses the UTF-8 encoding, which is

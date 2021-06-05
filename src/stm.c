@@ -265,6 +265,9 @@ stm_init(void)
   PRINT_DEBUG("\tVR_THRESHOLD=%d\n", _tinystm.vr_threshold);
 #endif /* CM == CM_MODULAR */
 
+#ifdef HELPER_THREAD
+  helper_thread_init(7,1); // Helper thread
+#endif /* HELPER_THREAD */
   /* Set locks and clock but should be already to 0 */
   memset((void *)_tinystm.locks, 0, LOCK_ARRAY_SIZE * sizeof(stm_word_t));
   CLOCK = 0;
@@ -273,7 +276,7 @@ stm_init(void)
 
   tls_init();
 
-  helper_thread_init(); // Helper thread
+  
 
 #ifdef SIGNAL_HANDLER
   if (getenv(NO_SIGNAL_HANDLER) == NULL) {
@@ -303,8 +306,9 @@ stm_exit(void)
 
   tls_exit();
   stm_quiesce_exit();
+#ifdef HELPER_THREAD
   helper_thread_exit(); // Helper thread
-
+#endif /* HELPER_THREAD */
 #ifdef EPOCH_GC
   gc_exit();
 #endif /* EPOCH_GC */

@@ -4,3 +4,6 @@
 *.a
 # Generated documentation
 /doc/
+*.out
+# VSCode
+.vscode/*

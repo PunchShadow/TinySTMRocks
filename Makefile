@@ -210,6 +210,19 @@ DEFINES += -DTLS_COMPILER
 DEFINES += -UUNIT_TX
 
 ########################################################################
+# RTM automatically profiling with PCMs
+########################################################################
+DEFINES += -DRTM_PROFILING
+# DEFINES += -URTM_PROFILING
+
+########################################################################
+# Enable helper thread for monitoring RTM PCMs
+########################################################################
+
+DEFINES += -DHELPER_THREAD
+#DEFINES += -UHELPER_THREAD
+
+########################################################################
 # Various default values can also be overridden:
 #
 # RW_SET_SIZE (default=4096): initial size of the read and write
@@ -269,7 +282,7 @@ else
   GC :=
 endif
 
-CPPFLAGS += -I$(SRCDIR)
+CPPFLAGS += -I$(SRCDIR) -I$(PCMDIR)
 CPPFLAGS += $(DEFINES)
 
 MODULES := $(patsubst %.c,%.o,$(wildcard $(SRCDIR)/mod_*.c))
@@ -280,9 +293,17 @@ all:	$(TMLIB)
 
 %.o:	%.c Makefile
 	$(CC) $(CPPFLAGS) $(CFLAGS) -DCOMPILE_FLAGS="$(CPPFLAGS) $(CFLAGS)" -c -o $@ $<
+	#$(CC) $(CPPFLAGS) $(CFLAGS) -DCOMPILE_FLAGS="$(CPPFLAGS) $(CFLAGS)" -c -o src/helper_thread.o src/helper_thread.c
+
+# PCM related
+helper_thread.o: helper_thread.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) -DCOMPILE_FLAGS="$(CPPFLAGS) $(CFLAGS)" -c -o $@ $<
+
+
+
 
 # Additional dependencies
-$(SRCDIR)/stm.o:	$(INCDIR)/stm.h
+$(SRCDIR)/stm.o:	$(INCDIR)/stm.h $(INCDIR)/helper_thread.h
 $(SRCDIR)/stm.o:	$(SRCDIR)/stm_internal.h $(SRCDIR)/stm_wt.h $(SRCDIR)/stm_wbetl.h $(SRCDIR)/stm_wbctl.h $(SRCDIR)/tls.h $(SRCDIR)/utils.h $(SRCDIR)/atomic.h
 
 %.s:	%.c Makefile
@@ -291,7 +312,8 @@ $(SRCDIR)/stm.o:	$(SRCDIR)/stm_internal.h $(SRCDIR)/stm_wt.h $(SRCDIR)/stm_wbetl
 %.o.c:	%.c Makefile
 	$(UNIFDEF) $(D) $< > $@ || true
 
-$(TMLIB):	$(SRCDIR)/$(TM).o $(SRCDIR)/wrappers.o $(GC) $(MODULES)
+# Link additional PCM object $(PCMOBJ) to libstm.a
+$(TMLIB):	$(SRCDIR)/$(TM).o $(SRCDIR)/wrappers.o $(SRCDIR)/helper_thread.o $(PCMOBJ) $(GC) $(MODULES)
 	$(AR) crus $@ $^
 
 test:	$(TMLIB)

@@ -33,6 +33,7 @@
 #include "utils.h"
 #include "atomic.h"
 #include "gc.h"
+#include "profile.h"
 
 /* ################################################################### *
  * DEFINES
@@ -396,8 +397,12 @@ typedef struct {
 #if CM == CM_MODULAR
   int (*contention_manager)(stm_tx_t *, stm_tx_t *, int);
 #endif /* CM == CM_MODULAR */
+#ifdef HELPER_THREAD
+  pthread_t monitor_thread;              /* Record the monitor_thread address */
+#endif /* HELPER_THREAD */
   /* At least twice a cache line (256 bytes to be on the safe side) */
   char padding[CACHELINE_SIZE];
+
 } ALIGNED global_t;
 
 extern global_t _tinystm;
@@ -1003,6 +1008,10 @@ stm_rollback(stm_tx_t *tx, unsigned int reason)
     tx->stat_aborts_2++;
 #endif /* TM_STATISTICS2 */
 
+#ifdef RTM_PROFILING
+  PROF_ABORT();
+#endif /* RTM_PROFILING */
+
   /* Set status to ABORTED */
   SET_STATUS(tx->status, TX_ABORTED);
 
@@ -1404,6 +1413,10 @@ int_stm_commit(stm_tx_t *tx)
 #if CM == CM_MODULAR || defined(TM_STATISTICS)
   tx->stat_retries = 0;
 #endif /* CM == CM_MODULAR || defined(TM_STATISTICS) */
+
+#ifdef RTM_PROFILING
+  PROF_COMMIT();
+#endif /* RTM_PROFILING*/
 
 #if CM == CM_BACKOFF
   /* Reset backoff */

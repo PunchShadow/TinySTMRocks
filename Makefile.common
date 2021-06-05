@@ -16,6 +16,16 @@ INCDIR = $(ROOT)/include
 LIBDIR = $(ROOT)/lib
 TMLIB = $(LIBDIR)/lib$(TM).a
 
+# PCM integration
+PCMDIR = $(ROOT)/pcm
+PCMLIB = $(ROOT)/pcm
+PCMOBJ = $(PCMLIB)/pcm_wrapper.o $(PCMLIB)/cpucounters.o $(PCMLIB)/pci.o
+PCMOBJ += $(PCMLIB)/mmio.o $(PCMLIB)/client_bw.o $(PCMLIB)/utils.o
+PCMOBJ += $(PCMLIB)/topology.o $(PCMLIB)/dashboard.o $(PCMLIB)/debug.o 
+PMCOBJ += $(PCMLIB)/threadpool.o $(PCMLIB)/resctrl.o $(PCMLIB)/msr.o -pthread -lrt
+
+
+
 # Supposing all compilers has -I -L
 # TODO -I$(SRCDIR) only for library build
 CPPFLAGS += -I$(INCDIR) -I$(SRCDIR)
@@ -30,6 +40,10 @@ LDFLAGS += -L$(LIBDIR) -l$(TM)
 
 # Only on linux / TODO make source compatible with non-pthread OS
 LDFLAGS += -lpthread
+
+# PCM integration
+LDFLAGS += -L$(PCMLIB)
+
 
 # Solaris default memory allocator is quite slow, better use mtmalloc
 # LDFLAGS += -lmtmalloc
