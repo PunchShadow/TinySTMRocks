@@ -47,7 +47,7 @@ DEFINES += -UTM_PROFILE
 ########################################################################
 
 DEFINES += -DDESIGN=WRITE_BACK_ETL
-# DEFINES += -DDESIGN=WRITE_BACK_CTL
+#DEFINES += -DDESIGN=WRITE_BACK_CTL
 # DEFINES += -DDESIGN=WRITE_THROUGH
 # DEFINES += -DDESIGN=MODULAR
 
@@ -101,8 +101,8 @@ DEFINES += -DIRREVOCABLE_ENABLED
 # from disabling them.
 ########################################################################
 
-DEFINES += -DTM_STATISTICS
-# DEFINES += -UTM_STATISTICS
+#DEFINES += -DTM_STATISTICS
+DEFINES += -UTM_STATISTICS
 # DEFINES += -DTM_STATISTICS2
 DEFINES += -UTM_STATISTICS2
 
@@ -131,7 +131,7 @@ DEFINES += -UWAIT_YIELD
 # design.
 ########################################################################
 
-# DEFINES += -DUSE_BLOOM_FILTER
+#DEFINES += -DUSE_BLOOM_FILTER
 DEFINES += -UUSE_BLOOM_FILTER
 
 ########################################################################
@@ -141,7 +141,7 @@ DEFINES += -UUSE_BLOOM_FILTER
 # enabling this feature.
 ########################################################################
 
-# DEFINES += -DEPOCH_GC
+#DEFINES += -DEPOCH_GC
 DEFINES += -UEPOCH_GC
 
 ########################################################################
@@ -151,7 +151,7 @@ DEFINES += -UEPOCH_GC
 # requires EPOCH_GC.
 ########################################################################
 
-# DEFINES += -DCONFLICT_TRACKING
+#DEFINES += -DCONFLICT_TRACKING
 DEFINES += -UCONFLICT_TRACKING
 
 ########################################################################
