@@ -15,6 +15,9 @@ SRCDIR = $(ROOT)/src
 INCDIR = $(ROOT)/include
 LIBDIR = $(ROOT)/lib
 TMLIB = $(LIBDIR)/lib$(TM).a
+CPPFLAGS += -g
+
+
 
 # PCM integration
 PCMDIR = $(ROOT)/pcm

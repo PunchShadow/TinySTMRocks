@@ -26,7 +26,27 @@ typedef struct
     int sample_period;
 } Monitor_arg;
 
+/* To record each threads' states */
+typedef struct
+{
+    uint64_t timestamp;
+    int tx_num;
+    int tx_commit;
+    int tx_abort;
+} Monitor_t;
 
+
+/* Read timestamp use rdtscp */
+/*
+inline unsigned uint64_t
+readTSC(void);
+*/
+
+/* Bound thread to a certain cpu */
+static inline int
+set_cpu(int i);
+
+#ifdef HELPER_THREAD
 /**
  * Initialize helper thread to monitor every working threads
  * 1: succeed, 0: failed
@@ -37,7 +57,7 @@ helper_thread_init(int thread_id, int sample_period);
 
 void
 helper_thread_exit();
-
+#endif /* HELPER_THREAD */
 
 
 #endif /* _HELPER_THREAD_H__ */

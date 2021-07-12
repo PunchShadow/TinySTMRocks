@@ -266,7 +266,7 @@ stm_init(void)
 #endif /* CM == CM_MODULAR */
 
 #ifdef HELPER_THREAD
-  helper_thread_init(7,1); // Helper thread
+  helper_thread_init(7,10000); // Helper thread
 #endif /* HELPER_THREAD */
   /* Set locks and clock but should be already to 0 */
   memset((void *)_tinystm.locks, 0, LOCK_ARRAY_SIZE * sizeof(stm_word_t));

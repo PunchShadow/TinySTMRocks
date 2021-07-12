@@ -8,6 +8,15 @@
 #include "stm_internal.h"
 #include "helper_thread.h"
 
+#include <x86intrin.h>
+
+/*
+inline
+unsigned uint64_t readTSC(void)
+{
+    return __rdtscp();
+}
+*/
 
 
 static inline int 
@@ -61,6 +70,7 @@ void *monitor(void *arg)
         void* after_CoreStates = PCM_getAllCounterStates(PCM);
         
         // Print each cores' state
+        
         for (int core=0; core < ncores; core++)
         {
             
@@ -72,12 +82,13 @@ void *monitor(void *arg)
             printf("\n");
         }
         
+        
         usleep(sample_period);  
     }
     pthread_exit((void *)0);
 
 }
-
+#ifdef HELPER_THREAD
 void
 helper_thread_init(int thread_id, int sample_period)
 {
@@ -95,8 +106,8 @@ helper_thread_init(int thread_id, int sample_period)
 
 
     // Create monitor thread
-    pthread_create(&_tinystm.monitor_thread, &attr, monitor, (void *)&m_arg);
 
+    pthread_create(&_tinystm.monitor_thread, &attr, monitor, (void *)&m_arg);
     pthread_attr_destroy(&attr);
 
 }
@@ -108,3 +119,4 @@ helper_thread_exit()
     printf("Enter helper_thread_exit\n");
     pthread_cancel(_tinystm.monitor_thread);
 }
+#endif /* HELPER_THREAD */

@@ -39,8 +39,8 @@ include Makefile.common
 # Refer to [PPoPP-08] for more details.
 ########################################################################
 
-# DEFINES += -DDESIGN=WRITE_BACK_ETL
-DEFINES += -DDESIGN=WRITE_BACK_CTL
+DEFINES += -DDESIGN=WRITE_BACK_ETL
+#DEFINES += -DDESIGN=WRITE_BACK_CTL
 # DEFINES += -DDESIGN=WRITE_THROUGH
 # DEFINES += -DDESIGN=MODULAR
 
@@ -75,7 +75,7 @@ DEFINES += -DDESIGN=WRITE_BACK_CTL
 ########################################################################
 
 # Pick one contention manager (CM)
-# DEFINES += -DCM=CM_SUICIDE
+DEFINES += -DCM=CM_SUICIDE
 # DEFINES += -DCM=CM_DELAY
 # DEFINES += -DCM=CM_BACKOFF
 # DEFINES += -DCM=CM_MODULAR
@@ -124,8 +124,8 @@ DEFINES += -UWAIT_YIELD
 # design.
 ########################################################################
 
-# DEFINES += -DUSE_BLOOM_FILTER
-DEFINES += -UUSE_BLOOM_FILTER
+DEFINES += -DUSE_BLOOM_FILTER
+# DEFINES += -UUSE_BLOOM_FILTER
 
 ########################################################################
 # Use an epoch-based memory allocator and garbage collector to ensure
@@ -212,15 +212,15 @@ DEFINES += -UUNIT_TX
 ########################################################################
 # RTM automatically profiling with PCMs
 ########################################################################
-DEFINES += -DRTM_PROFILING
-# DEFINES += -URTM_PROFILING
+# DEFINES += -DRTM_PROFILING
+DEFINES += -URTM_PROFILING
 
 ########################################################################
 # Enable helper thread for monitoring RTM PCMs
 ########################################################################
 
-DEFINES += -DHELPER_THREAD
-#DEFINES += -UHELPER_THREAD
+#DEFINES += -DHELPER_THREAD
+DEFINES += -UHELPER_THREAD
 
 ########################################################################
 # Various default values can also be overridden:
