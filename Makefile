@@ -141,8 +141,8 @@ DEFINES += -UUSE_BLOOM_FILTER
 # enabling this feature.
 ########################################################################
 
-#DEFINES += -DEPOCH_GC
-DEFINES += -UEPOCH_GC
+DEFINES += -DEPOCH_GC
+#DEFINES += -UEPOCH_GC
 
 ########################################################################
 # Keep track of conflicts between transactions and notifies the
@@ -151,8 +151,8 @@ DEFINES += -UEPOCH_GC
 # requires EPOCH_GC.
 ########################################################################
 
-#DEFINES += -DCONFLICT_TRACKING
-DEFINES += -UCONFLICT_TRACKING
+DEFINES += -DCONFLICT_TRACKING
+#DEFINES += -UCONFLICT_TRACKING
 
 ########################################################################
 # Allow transactions to read the previous version of locked memory
