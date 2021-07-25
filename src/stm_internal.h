@@ -34,6 +34,8 @@
 #include "atomic.h"
 #include "gc.h"
 #include "profile.h"
+#include "mod_dp.h" /* Work-stealing */
+#include "task_queue.h" 
 
 /* ################################################################### *
  * DEFINES
@@ -360,6 +362,12 @@ typedef struct stm_tx {                 /* Transaction descriptor */
   unsigned int stat_locked_reads_failed;/* Failed reads of previous value */
 # endif /* READ_LOCKED_DATA */
 #endif /* TM_STATISTICS2 */
+#ifdef WORK_STEALING
+  long task_queue_position;             /* The position number corresponding to _tinystm.task_queue_info array*/
+  JMP_BUF task_queue_end;               /* Store the end TM_THREAD_EXIT() */
+  JMP_BUF task_queue_return;            /* Store the begin of partition function */
+#endif /* WORK_STEALING */
+
 } stm_tx_t;
 
 /* This structure should be ordered by hot and cold variables */
@@ -400,6 +408,12 @@ typedef struct {
 #ifdef HELPER_THREAD
   pthread_t monitor_thread;              /* Record the monitor_thread address */
 #endif /* HELPER_THREAD */
+
+  thread_task_queue_info** task_queue_info; /* Each threads task queue info */
+  unsigned long task_queue_nb;
+  int task_queue_retry_time;
+#ifdef WORK_STEALING
+#endif /* WORK_STEALING */
   /* At least twice a cache line (256 bytes to be on the safe side) */
   char padding[CACHELINE_SIZE];
 
@@ -424,6 +438,9 @@ extern global_t _tinystm;
 
 static NOINLINE void
 stm_rollback(stm_tx_t *tx, unsigned int reason);
+
+static void
+int_stm_task_queue_check(stm_tx_t *tx);
 
 /* ################################################################### *
  * INLINE FUNCTIONS
@@ -1284,7 +1301,9 @@ int_stm_exit_thread(stm_tx_t *tx)
 #ifdef EPOCH_GC
   stm_word_t t;
 #endif /* EPOCH_GC */
-
+#ifdef WORK_STEALING
+  int_stm_task_queue_check(tx); // Whether to return or not.
+#endif /* WORK_STEALING */ 
   PRINT_DEBUG("==> stm_exit_thread(%p[%lu-%lu])\n", tx, (unsigned long)tx->start, (unsigned long)tx->end);
 
   /* Avoid finalizing again a thread */
@@ -1627,6 +1646,138 @@ int_stm_get_specific(stm_tx_t *tx, int key)
   assert (tx != NULL && key >= 0 && key < _tinystm.nb_specific);
   return (void *)ATOMIC_LOAD(&tx->data[key]);
 }
+
+
+/*
+* ###########################################################
+* # WORK_STEALING 
+* ############################################################
+*/
+
+static INLINE long
+int_stm_task_queue_victim_select(stm_tx_t *t)
+{
+  // TODO: Use proflie information to choose the victim thread.
+  // Temporally use random selection instead.
+  long thread_nb = _tinystm.task_queue_nb;
+  long self_num = t->task_queue_position;
+  long victim_nb;
+  time_t tt;
+  srand((unsigned) time(&tt));
+  do {
+    victim_nb = random() % thread_nb;
+  } while (victim_nb == self_num);
+
+  return victim_nb;
+}
+
+
+static INLINE void
+int_stm_task_queue_init(long numThread)
+{
+  _tinystm.task_queue_retry_time = 10; // The retry time to steal task
+  _tinystm.task_queue_info = malloc(sizeof(thread_task_queue_info*) * numThread );
+  for ( long i=0; i < numThread; i++) {
+    _tinystm.task_queue_info[i] = malloc(sizeof(thread_task_queue_info));
+  }
+  _tinystm.task_queue_nb = numThread; 
+}
+
+
+static INLINE void
+int_stm_task_queue_exit()
+{
+  long numThread = _tinystm.task_queue_nb;
+  for (long i=0; i < numThread; i++) {
+    mod_dp_task_queue_delete(_tinystm.task_queue_info[i]->task_queue);
+    free(_tinystm.task_queue_info[i]);
+  }
+  free(_tinystm.task_queue_info);
+}
+
+/*
+ * Called by int_stm_init_thread() to register task queue in each thread.
+ */
+
+static INLINE void
+int_stm_task_queue_register(stm_tx_t *t)
+{
+  pthread_t thread_id = pthread_self();
+  long numThread = _tinystm.task_queue_nb;
+
+  printf("===>stm_task_queue_register %u\n", thread_id);
+
+  /* */
+  for (long i=0; i < numThread; i++) {
+    if (_tinystm.task_queue_info[i]->task_queue == NULL) {
+      _tinystm.task_queue_info[i]->task_queue = mod_dp_task_queue_init();
+      _tinystm.task_queue_info[i]->thread_id = thread_id;
+      // Register the task queue position to transaction descriptor
+      t->task_queue_position = i;
+      break;
+    }
+  }
+}
+
+static INLINE void
+int_stm_task_queue_push(stm_tx_t *t, ws_task* ws_task)
+{
+  pthread_t this_thread_id = pthread_self();
+  long tp = t->task_queue_position;
+
+  assert(_tinystm.task_queue_info[tp]->thread_id == this_thread_id);
+
+  ws_task_queue_push(_tinystm.task_queue_info[tp]->task_queue, ws_task);
+}
+
+static INLINE ws_task*
+int_stm_task_queue_pop(stm_tx_t *t)
+{
+  ws_task* task_ptr;
+  pthread_t this_thread_id = pthread_self();
+  long tp = t->task_queue_position;
+  long victim_nb;
+  int retry_time = 0;
+  assert(_tinystm.task_queue_info[tp]->thread_id == this_thread_id);
+
+  task_ptr =  ws_task_queue_pop(_tinystm.task_queue_info[tp]->task_queue);
+
+  /* If task queue is empty, taking tasks from other threads */
+  if (!task_ptr) {
+    do {
+      // Select victim thread & take task from the thread
+      victim_nb = int_stm_task_queue_victim_select(t);
+      task_ptr = ws_task_queue_take(_tinystm.task_queue_info[victim_nb]->task_queue);
+      retry_time ++;
+    } while (task_ptr == NULL || retry_time >= _tinystm.task_queue_retry_time);
+  } 
+  
+  // task_ptr may be NULL since reaching max retry time
+  return task_ptr;
+}
+
+/*
+ * Set the address to jump to when there are no more tasks.
+ * Called before stm_thread_exit().
+ */
+
+static NOINLINE void
+int_stm_task_queue_check(stm_tx_t *tx)
+{
+  int jmp_ret = setjmp(tx->task_queue_end); // First set
+  // Only when 
+  if (!jmp_ret) {
+    longjmp(tx->task_queue_return, 1);
+  }
+}
+
+
+#ifdef WORK_STEALING
+
+
+#endif /* WORK_STEALING */
+
+
 
 #endif /* _STM_INTERNAL_H_ */
 

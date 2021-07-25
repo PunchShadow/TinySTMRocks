@@ -38,6 +38,8 @@
 #include "atomic.h"
 #include "gc.h"
 #include "helper_thread.h" // Helper_thread
+#include "task_queue.h" // Work-stealing
+
 /* ################################################################### *
  * DEFINES
  * ################################################################### */
@@ -65,6 +67,10 @@ global_t _tinystm =
     , .irrevocable = 0
 #endif /* IRREVOCABLE_ENABLED */
     };
+
+#define MIN(x,y)         (x < y?x:y)
+#define MAX(x,y)         (x > y?x:y)
+
 
 /* ################################################################### *
  * TYPES
@@ -276,7 +282,6 @@ stm_init(void)
 
   tls_init();
 
-  
 
 #ifdef SIGNAL_HANDLER
   if (getenv(NO_SIGNAL_HANDLER) == NULL) {
@@ -1047,4 +1052,88 @@ stm_inc_clock(void)
 {
   FETCH_INC_CLOCK;
 }
+
+
+/* ################################################################### *
+ * WORK_STEALING task queue
+ * ################################################################### */
+
+/*
+ * Initialize task queue info to array.
+ * Should be used in TM_STARTUP() Macro.
+ */
+
+_CALLCONV void
+stm_task_queue_init(long numThread)
+{
+  int_stm_task_queue_init(numThread);
+}
+
+/*
+ * Free the memory of task queues.
+ * Should be used in TM_SHOUTDOWN() Macro.
+ */
+
+_CALLCONV void
+stm_task_queue_exit(void)
+{
+  int_stm_task_queue_exit();
+}
+
+/*
+ * Allocate and assign task to each task queue.
+ */
+
+_CALLCONV void
+stm_task_queue_partition(long min, long max, long stride)
+{
+  /* TODO: Parition with profiling data */
+  // Use static partition temporally.
+  TX_GET;
+  long position = tx->task_queue_position; // The number of task queue
+  long task_queue_nb = _tinystm.task_queue_nb;
+  long range = max - min;
+  long chunk = MAX(1, ((range + task_queue_nb/2) / task_queue_nb));
+  long start = min + chunk * position;
+  long stop;
+
+  
+  if (position == (task_queue_nb-1)) {
+    stop = max;
+  } else {
+    stop = MIN(max, (start + chunk));
+  }
+
+  // Wrap regions to tasks and push tasks into task queue.
+  for (long i = start; i < stop; i += stride) {
+    long end  = MIN(stop, (i + stride));
+    ws_task* task_ptr = ws_task_create(i, end);
+    ws_task_queue *task_queue = _tinystm.task_queue_info[position]->task_queue;
+    int_stm_task_queue_push(tx, task_ptr);
+  }
+}
+
+_CALLCONV void
+stm_task_queue_get(long* startPtr, long* stopPtr)
+{
+  TX_GET;
+  setjmp(tx->task_queue_return);
+  ws_task* task_ptr;
+  task_ptr = int_stm_task_queue_pop(tx);
+  // Normal execution
+  if (task_ptr != NULL) {
+    startPtr = task_ptr->start;
+    stopPtr = task_ptr->end;
+  } else {
+    // There're no tasks to do
+    // TODO: Jump to the end of TM_THREAD_EXIT()
+    longjmp(tx->task_queue_end, 1);
+  }
+
+}
+
+
+#ifdef WORK_STEALING
+
+#endif /* WORK_STEALING */
 

@@ -6,7 +6,7 @@
 
 
 ws_task_queue*
-task_queue_new()
+ws_task_queue_new()
 {
     ws_task_queue* ws_tq;
     ws_tq = malloc(sizeof(ws_task_queue));
@@ -34,12 +34,12 @@ ws_task_queue_push(ws_task_queue* ws_tq, ws_task* ws_task)
     size_t num_tasks = ws_tq->_bottom - old_top;
     ws_task_circular_array *old_c_array = ws_tq->_task_queue;
 
-    if (__builtin_expect(num_tasks >= task_circular_array_size(old_c_array) - 1, 0))
+    if (__builtin_expect(num_tasks >= ws_task_circular_array_size(old_c_array) - 1, 0))
     {
-        ws_tq->_task_queue = task_circular_array_double_size(old_c_array);
-        task_circular_array_delete(old_c_array);
+        ws_tq->_task_queue = ws_task_circular_array_double_size(old_c_array);
+        ws_task_circular_array_delete(old_c_array);
     }
-    task_circular_array_set(ws_tq->_task_queue, ws_tq->_bottom, ws_task);
+    ws_task_circular_array_set(ws_tq->_task_queue, ws_tq->_bottom, ws_task);
     ++ws_tq->_bottom;
     __sync_synchronize();
 }

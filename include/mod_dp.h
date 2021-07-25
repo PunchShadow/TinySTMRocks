@@ -34,11 +34,49 @@
 #ifndef _MOD_DP_H_
 # define _MOD_DP_H_
 
+
+# include <pthread.h>
+
 # include "stm.h"
+# include "task_queue.h"
+
 
 # ifdef __cplusplus
 extern "C" {
 # endif
+
+
+typedef struct thread_task_queue_info {
+    ws_task_queue* task_queue; /* Pointer thread own task queue */
+    pthread_t thread_id; /* Identify */
+    //thread_task_queue_info* next;
+} thread_task_queue_info;
+
+
+//@{
+/**
+ * Initialize task queue in thread_task_queue_info array.
+ *
+ * @return
+ *   Pointer to the allocated ws_task_queue.
+ */
+ws_task_queue* 
+mod_dp_task_queue_init(void);
+//@}
+
+
+static inline void 
+mod_dp_task_queue_delete(ws_task_queue* ws_tq);
+
+
+
+ws_task* mod_dp_ws_task_create(long start, long end);
+
+void mod_dp_ws_task_delete(ws_task* task_ptr);
+
+void stm_static_partition(long min, long max, long num_thread, 
+                          long* startPtr, long* stopPtr);
+
 
 void stm_dynamic_parition(long min, long max, long num_thread, 
                           long* startPtr, long* stopPtr);

@@ -697,6 +697,19 @@ int stm_set_irrevocable(int serial) _CALLCONV;
 int stm_set_irrevocable_tx(struct stm_tx *tx, int serial) _CALLCONV;
 //@}
 
+/* ################################################################### *
+ * WORK_STEALING task queue
+ * ################################################################### */
+
+void stm_task_queue_init(long numThread) _CALLCONV;
+void stm_task_queue_exit(void) _CALLCONV;
+ 
+ // Assign tasks to each task queue
+void stm_task_queue_partition(long min, long max, long stride) _CALLCONV;
+
+void stm_task_queue_get(long* startPtr, long* stopPtr) _CALLCONV;
+
+
 #ifdef __cplusplus
 }
 #endif

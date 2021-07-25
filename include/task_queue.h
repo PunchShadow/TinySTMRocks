@@ -18,9 +18,10 @@ typedef struct ws_task {
     /* Partition start and end number */
     long start;
     long end;
-
+    /*
     struct ws_task* parent;
     struct ws_task** child; 
+    */
 } ws_task;
 
 
@@ -36,6 +37,16 @@ typedef struct ws_task_queue {
     volatile size_t _bottom;
 } ws_task_queue;
 
+static inline ws_task*
+ws_task_create(long start, long stop)
+{
+    ws_task* task_ptr;
+    task_ptr = malloc(sizeof(ws_task));
+    task_ptr->start = start;
+    task_ptr->end = stop;
+    
+    return task_ptr;
+}
 
 
 static inline ws_task_circular_array*
@@ -76,7 +87,7 @@ static inline ws_task_circular_array*
 ws_task_circular_array_double_size(ws_task_circular_array* old_array)
 {
     ws_task_circular_array* new_array;
-    if (old_array->size * 2 >= (1 << 31))
+    if (old_array->_size * 2 >= (1 << 31))
     {
         fprintf(stderr, "task_circular_array cannot deal with more than 2^31 tasks.\n");
         exit(1);
@@ -88,7 +99,7 @@ ws_task_circular_array_double_size(ws_task_circular_array* old_array)
 }
 
 static inline unsigned long long
-task_circular_array_size(ws_task_circular_array* ws_array)
+ws_task_circular_array_size(ws_task_circular_array* ws_array)
 {
     return ws_array->_size;
 }
@@ -96,7 +107,7 @@ task_circular_array_size(ws_task_circular_array* ws_array)
 
 
 /* Task queue methods */
-ws_task_queue* task_queue_new();
+ws_task_queue* ws_task_queue_new();
 
 void ws_task_queue_delete(ws_task_queue* ws_tq);
 

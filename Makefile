@@ -223,6 +223,13 @@ DEFINES += -URTM_PROFILING
 DEFINES += -UHELPER_THREAD
 
 ########################################################################
+# Enable work stealing thread task
+########################################################################
+
+DEFINES += -DWORK_STEALING
+# DEFINES += -UWORK_STEALING
+
+########################################################################
 # Various default values can also be overridden:
 #
 # RW_SET_SIZE (default=4096): initial size of the read and write
@@ -293,12 +300,12 @@ all:	$(TMLIB)
 
 %.o:	%.c Makefile
 	$(CC) $(CPPFLAGS) $(CFLAGS) -DCOMPILE_FLAGS="$(CPPFLAGS) $(CFLAGS)" -c -o $@ $<
-	#$(CC) $(CPPFLAGS) $(CFLAGS) -DCOMPILE_FLAGS="$(CPPFLAGS) $(CFLAGS)" -c -o src/helper_thread.o src/helper_thread.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) -DCOMPILE_FLAGS="$(CPPFLAGS) $(CFLAGS)" -c -o src/helper_thread.o src/helper_thread.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) -DCOMPILE_FLAGS="$(CPPFLAGS) $(CFLAGS)" -c -o src/task_queue.o src/task_queue.c
 
 # PCM related
 helper_thread.o: helper_thread.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -DCOMPILE_FLAGS="$(CPPFLAGS) $(CFLAGS)" -c -o $@ $<
-
 
 
 
