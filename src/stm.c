@@ -1080,6 +1080,29 @@ stm_task_queue_exit(void)
   int_stm_task_queue_exit();
 }
 
+_CALLCONV void
+stm_task_queue_register(void)
+{
+  TX_GET;
+  int_stm_task_queue_register(tx);
+}
+
+
+_CALLCONV sigjmp_buf *
+stm_task_queue_start(void)
+{
+  TX_GET;
+  return int_stm_task_queue_start(tx);
+}
+
+_CALLCONV sigjmp_buf *
+stm_task_queue_end(void)
+{
+  TX_GET;
+  return int_stm_task_queue_end(tx);
+}
+
+
 /*
  * Allocate and assign task to each task queue.
  */
@@ -1110,13 +1133,13 @@ stm_task_queue_partition(long min, long max, long stride)
     ws_task* task_ptr = ws_task_create(i, end);
     int_stm_task_queue_push(tx, task_ptr);
   }
+
 }
 
 _CALLCONV void
 stm_task_queue_get(long* startPtr, long* stopPtr)
 {
   TX_GET;
-  setjmp(tx->task_queue_return);
   ws_task* task_ptr;
   task_ptr = int_stm_task_queue_pop(tx);
   // Normal execution
@@ -1126,7 +1149,7 @@ stm_task_queue_get(long* startPtr, long* stopPtr)
   } else {
     // There're no tasks to do
     // TODO: Jump to the end of TM_THREAD_EXIT()
-    longjmp(tx->task_queue_end, 1);
+    siglongjmp(tx->task_queue_end, 1);
   }
 
 }

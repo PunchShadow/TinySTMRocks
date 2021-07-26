@@ -709,6 +709,9 @@ void stm_task_queue_partition(long min, long max, long stride) _CALLCONV;
 
 void stm_task_queue_get(long* startPtr, long* stopPtr) _CALLCONV;
 
+sigjmp_buf *stm_task_queue_start(void);
+sigjmp_buf *stm_task_queue_end(void);
+
 
 #ifdef __cplusplus
 }

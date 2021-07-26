@@ -364,8 +364,8 @@ typedef struct stm_tx {                 /* Transaction descriptor */
 #endif /* TM_STATISTICS2 */
 #ifdef WORK_STEALING
   long task_queue_position;             /* The position number corresponding to _tinystm.task_queue_info array*/
-  JMP_BUF task_queue_end;               /* Store the end TM_THREAD_EXIT() */
-  JMP_BUF task_queue_return;            /* Store the begin of partition function */
+  JMP_BUF task_queue_start;             /* Store the start of TM_PARTITION() */
+  JMP_BUF task_queue_end;               /* Store the end of TM_THREAD_EXIT() */
 #endif /* WORK_STEALING */
 
 } stm_tx_t;
@@ -439,8 +439,6 @@ extern global_t _tinystm;
 static NOINLINE void
 stm_rollback(stm_tx_t *tx, unsigned int reason);
 
-static void
-int_stm_task_queue_check(stm_tx_t *tx);
 
 /* ################################################################### *
  * INLINE FUNCTIONS
@@ -1301,9 +1299,6 @@ int_stm_exit_thread(stm_tx_t *tx)
 #ifdef EPOCH_GC
   stm_word_t t;
 #endif /* EPOCH_GC */
-#ifdef WORK_STEALING
-  int_stm_task_queue_check(tx); // Whether to return or not.
-#endif /* WORK_STEALING */ 
   PRINT_DEBUG("==> stm_exit_thread(%p[%lu-%lu])\n", tx, (unsigned long)tx->start, (unsigned long)tx->end);
 
   /* Avoid finalizing again a thread */
@@ -1761,14 +1756,24 @@ int_stm_task_queue_pop(stm_tx_t *t)
  * Called before stm_thread_exit().
  */
 
-static NOINLINE void
-int_stm_task_queue_check(stm_tx_t *tx)
+static INLINE sigjmp_buf *
+int_stm_task_queue_start(stm_tx_t *tx)
 {
+  return &tx->task_queue_start;
+  
+  /*
   int jmp_ret = setjmp(tx->task_queue_end); // First set
   // Only when 
   if (!jmp_ret) {
     longjmp(tx->task_queue_return, 1);
   }
+  */
+}
+
+static INLINE sigjmp_buf *
+int_stm_task_queue_end(stm_tx_t *tx)
+{
+  return &tx->task_queue_end;
 }
 
 
