@@ -300,17 +300,19 @@ all:	$(TMLIB)
 
 %.o:	%.c Makefile
 	$(CC) $(CPPFLAGS) $(CFLAGS) -DCOMPILE_FLAGS="$(CPPFLAGS) $(CFLAGS)" -c -o $@ $<
-	$(CC) $(CPPFLAGS) $(CFLAGS) -DCOMPILE_FLAGS="$(CPPFLAGS) $(CFLAGS)" -c -o src/helper_thread.o src/helper_thread.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) -DCOMPILE_FLAGS="$(CPPFLAGS) $(CFLAGS)" -c -o src/task_queue.o src/task_queue.c
+#	$(CC) $(CPPFLAGS) $(CFLAGS) -DCOMPILE_FLAGS="$(CPPFLAGS) $(CFLAGS)" -c -o src/helper_thread.o src/helper_thread.c
+#	$(CC) $(CPPFLAGS) $(CFLAGS) -DCOMPILE_FLAGS="$(CPPFLAGS) $(CFLAGS)" -c -o src/task_queue.o src/task_queue.c
 
 # PCM related
 helper_thread.o: helper_thread.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -DCOMPILE_FLAGS="$(CPPFLAGS) $(CFLAGS)" -c -o $@ $<
 
+task_queue.o: task_queue.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) -DCOMPILE_FLAGS="$(CPPFLAGS) $(CFLAGS)" -c -o src/task_queue.o src/task_queue.c
 
 
 # Additional dependencies
-$(SRCDIR)/stm.o:	$(INCDIR)/stm.h $(INCDIR)/helper_thread.h
+$(SRCDIR)/stm.o:	$(INCDIR)/stm.h $(INCDIR)/helper_thread.h $(INCDIR)/task_queue.h
 $(SRCDIR)/stm.o:	$(SRCDIR)/stm_internal.h $(SRCDIR)/stm_wt.h $(SRCDIR)/stm_wbetl.h $(SRCDIR)/stm_wbctl.h $(SRCDIR)/tls.h $(SRCDIR)/utils.h $(SRCDIR)/atomic.h
 
 %.s:	%.c Makefile
@@ -320,7 +322,7 @@ $(SRCDIR)/stm.o:	$(SRCDIR)/stm_internal.h $(SRCDIR)/stm_wt.h $(SRCDIR)/stm_wbetl
 	$(UNIFDEF) $(D) $< > $@ || true
 
 # Link additional PCM object $(PCMOBJ) to libstm.a
-$(TMLIB):	$(SRCDIR)/$(TM).o $(SRCDIR)/wrappers.o $(SRCDIR)/helper_thread.o $(PCMOBJ) $(GC) $(MODULES)
+$(TMLIB):	$(SRCDIR)/$(TM).o $(SRCDIR)/wrappers.o $(SRCDIR)/helper_thread.o $(PCMOBJ) $(WSOBJ) $(GC) $(MODULES)
 	$(AR) crus $@ $^
 
 test:	$(TMLIB)

@@ -1108,7 +1108,6 @@ stm_task_queue_partition(long min, long max, long stride)
   for (long i = start; i < stop; i += stride) {
     long end  = MIN(stop, (i + stride));
     ws_task* task_ptr = ws_task_create(i, end);
-    ws_task_queue *task_queue = _tinystm.task_queue_info[position]->task_queue;
     int_stm_task_queue_push(tx, task_ptr);
   }
 }
@@ -1122,8 +1121,8 @@ stm_task_queue_get(long* startPtr, long* stopPtr)
   task_ptr = int_stm_task_queue_pop(tx);
   // Normal execution
   if (task_ptr != NULL) {
-    startPtr = task_ptr->start;
-    stopPtr = task_ptr->end;
+    *startPtr = task_ptr->start;
+    *stopPtr = task_ptr->end;
   } else {
     // There're no tasks to do
     // TODO: Jump to the end of TM_THREAD_EXIT()

@@ -1689,7 +1689,7 @@ int_stm_task_queue_exit()
 {
   long numThread = _tinystm.task_queue_nb;
   for (long i=0; i < numThread; i++) {
-    mod_dp_task_queue_delete(_tinystm.task_queue_info[i]->task_queue);
+    ws_task_queue_delete(_tinystm.task_queue_info[i]->task_queue);
     free(_tinystm.task_queue_info[i]);
   }
   free(_tinystm.task_queue_info);
@@ -1705,7 +1705,7 @@ int_stm_task_queue_register(stm_tx_t *t)
   pthread_t thread_id = pthread_self();
   long numThread = _tinystm.task_queue_nb;
 
-  printf("===>stm_task_queue_register %u\n", thread_id);
+  printf("===>stm_task_queue_register %lu\n", thread_id);
 
   /* */
   for (long i=0; i < numThread; i++) {
@@ -1722,10 +1722,10 @@ int_stm_task_queue_register(stm_tx_t *t)
 static INLINE void
 int_stm_task_queue_push(stm_tx_t *t, ws_task* ws_task)
 {
-  pthread_t this_thread_id = pthread_self();
+  //pthread_t this_thread_id = pthread_self();
   long tp = t->task_queue_position;
 
-  assert(_tinystm.task_queue_info[tp]->thread_id == this_thread_id);
+  //assert(_tinystm.task_queue_info[tp]->thread_id == this_thread_id);
 
   ws_task_queue_push(_tinystm.task_queue_info[tp]->task_queue, ws_task);
 }
@@ -1734,11 +1734,11 @@ static INLINE ws_task*
 int_stm_task_queue_pop(stm_tx_t *t)
 {
   ws_task* task_ptr;
-  pthread_t this_thread_id = pthread_self();
+  //pthread_t this_thread_id = pthread_self();
   long tp = t->task_queue_position;
   long victim_nb;
   int retry_time = 0;
-  assert(_tinystm.task_queue_info[tp]->thread_id == this_thread_id);
+  //assert(_tinystm.task_queue_info[tp]->thread_id == this_thread_id);
 
   task_ptr =  ws_task_queue_pop(_tinystm.task_queue_info[tp]->task_queue);
 
