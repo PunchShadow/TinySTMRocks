@@ -1663,6 +1663,7 @@ int_stm_task_queue_victim_select(stm_tx_t *t)
     victim_nb = random() % thread_nb;
   } while (victim_nb == self_num);
 
+  PRINT_DEBUG("==>stm_task_queue_victim_select(%lu)\n", victim_nb);
   return victim_nb;
 }
 
@@ -1670,6 +1671,7 @@ int_stm_task_queue_victim_select(stm_tx_t *t)
 static INLINE void
 int_stm_task_queue_init(long numThread)
 {
+  PRINT_DEBUG("==>stm_task_queue_init\n");
   _tinystm.task_queue_retry_time = 10; // The retry time to steal task
   _tinystm.task_queue_info = malloc(sizeof(thread_task_queue_info*) * numThread );
   for ( long i=0; i < numThread; i++) {
@@ -1682,6 +1684,8 @@ int_stm_task_queue_init(long numThread)
 static INLINE void
 int_stm_task_queue_exit()
 {
+  PRINT_DEBUG("==>stm_task_queue_exit\n");
+
   long numThread = _tinystm.task_queue_nb;
   for (long i=0; i < numThread; i++) {
     ws_task_queue_delete(_tinystm.task_queue_info[i]->task_queue);
@@ -1700,8 +1704,6 @@ int_stm_task_queue_register(stm_tx_t *t)
   pthread_t thread_id = pthread_self();
   long numThread = _tinystm.task_queue_nb;
 
-  printf("===>stm_task_queue_register %lu\n", thread_id);
-
   /* */
   for (long i=0; i < numThread; i++) {
     if (_tinystm.task_queue_info[i]->task_queue == NULL) {
@@ -1709,6 +1711,7 @@ int_stm_task_queue_register(stm_tx_t *t)
       _tinystm.task_queue_info[i]->thread_id = thread_id;
       // Register the task queue position to transaction descriptor
       t->task_queue_position = i;
+      PRINT_DEBUG("==>stm_task_queue_register(%lu, [%p])\n", thread_id, _tinystm.task_queue_info[i]->task_queue);
       break;
     }
   }
@@ -1717,12 +1720,14 @@ int_stm_task_queue_register(stm_tx_t *t)
 static INLINE void
 int_stm_task_queue_push(stm_tx_t *t, ws_task* ws_task)
 {
+  
   //pthread_t this_thread_id = pthread_self();
   long tp = t->task_queue_position;
-
+  ws_task_queue* tq = _tinystm.task_queue_info[tp]->task_queue;
   //assert(_tinystm.task_queue_info[tp]->thread_id == this_thread_id);
 
-  ws_task_queue_push(_tinystm.task_queue_info[tp]->task_queue, ws_task);
+  ws_task_queue_push(tq, ws_task);
+  //PRINT_DEBUG("==>stm_task_push_queue_size(%llu)\n", ws_task_circular_array_size(tq->_task_queue));
 }
 
 static INLINE ws_task*
@@ -1744,9 +1749,9 @@ int_stm_task_queue_pop(stm_tx_t *t)
       victim_nb = int_stm_task_queue_victim_select(t);
       task_ptr = ws_task_queue_take(_tinystm.task_queue_info[victim_nb]->task_queue);
       retry_time ++;
-    } while (task_ptr == NULL || retry_time >= _tinystm.task_queue_retry_time);
+      printf("retry_time: %d\n", retry_time);
+    } while ((task_ptr == NULL) & (retry_time < _tinystm.task_queue_retry_time));
   } 
-  
   // task_ptr may be NULL since reaching max retry time
   return task_ptr;
 }
@@ -1759,6 +1764,7 @@ int_stm_task_queue_pop(stm_tx_t *t)
 static INLINE sigjmp_buf *
 int_stm_task_queue_start(stm_tx_t *tx)
 {
+  printf("===>stm_task_queue_start\n");
   return &tx->task_queue_start;
   
   /*
@@ -1773,6 +1779,7 @@ int_stm_task_queue_start(stm_tx_t *tx)
 static INLINE sigjmp_buf *
 int_stm_task_queue_end(stm_tx_t *tx)
 {
+  printf("===>stm_task_queue_end\n");
   return &tx->task_queue_end;
 }
 

@@ -439,12 +439,16 @@
                                           if (stm_get_global_stats("global_max_retries", &u) != 0) \
                                             printf("Max retries : %lu\n", u); \
                                         } \
+                                        stm_task_queue_exit(); \
                                         stm_exit()
 
-#      define TM_THREAD_ENTER()         stm_init_thread(); \
-                                        stm_task_queue_register()
-                                        
-#      define TM_THREAD_EXIT()          do { \
+#      define TM_THREAD_ENTER()         do { \
+                                            stm_init_thread(); \
+                                            stm_task_queue_register(); \
+                                        } while(0)
+
+
+#      define TM_THREAD_EXIT2()         do { \
                                             sigjmp_buf *_tq_end = stm_task_queue_end();\
                                             if (_tq_end != NULL) { \
                                               int end_ret = sigsetjmp(*_tq_end, 0); \
@@ -452,11 +456,11 @@
                                                 sigjmp_buf *_tq_start = stm_task_queue_start(); \
                                                 siglongjmp(*_tq_start, 1); \
                                               } \
-                                            } \                                            
-                                            stm_task_queue_exit(); \
-                                            stm_exit_thread()
+                                            } \
+                                            stm_exit_thread(); \
                                         } while(0)
 
+#      define TM_THREAD_EXIT()          stm_exit_thread()
                                         
 
 #      define P_MALLOC(size)            malloc(size)

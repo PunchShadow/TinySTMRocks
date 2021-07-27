@@ -56,20 +56,23 @@ ws_task_queue_pop(ws_task_queue* ws_tq)
     old_top = ws_tq->_top;
     new_top = old_top + 1;
     num_tasks = ws_tq->_bottom - old_top;
-
+    printf("num_task: %ld\n", num_tasks);
     if (__builtin_expect(num_tasks < 0, 0))
     {
         /* There is no task remaining */
+        printf("Task number is zero\n");
         ws_tq->_bottom = old_top;
         return NULL;
     } else if (__builtin_expect(num_tasks == 0, 0))
     {
+        printf("Task number is zero 1\n");
         ws_task* res = ws_task_circular_array_get(ws_tq->_task_queue, ws_tq->_bottom);
         __sync_synchronize();
 
         if (!__sync_bool_compare_and_swap(&ws_tq->_top, old_top, new_top))
         {
             /* take() already took the task */
+            printf("Task number is zero\n");
             return NULL;
         } else
         {
