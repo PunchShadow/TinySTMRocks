@@ -1128,11 +1128,11 @@ stm_task_queue_partition(long min, long max, long stride)
   }
 
   // Wrap regions to tasks and push tasks into task queue.
-  for (long i = start; i < stop; i += (stride+1)) {
+  for (long i = start; i < stop; i += (stride)) {
     long end  = MIN(stop, (i + stride));
     ws_task* task_ptr = ws_task_create(i, end);
     PRINT_DEBUG("==> TM_PARTITION[%lu](%lu, %lu)\n", position, i, end);
-    int_stm_task_queue_push(tx, task_ptr);
+    int_stm_task_queue_enqueue(tx, task_ptr);
   }
 
 }
@@ -1142,11 +1142,12 @@ stm_task_queue_get(long* startPtr, long* stopPtr)
 {
   TX_GET;
   ws_task* task_ptr;
-  task_ptr = int_stm_task_queue_pop(tx);
+  task_ptr = int_stm_task_queue_dequeue(tx);
   // Normal execution
   if (task_ptr != NULL) {
     *startPtr = task_ptr->start;
     *stopPtr = task_ptr->end;
+    PRINT_DEBUG("Task get, v_start: %lu, v_stop: %lu\n", *startPtr, *stopPtr);
   } else {
     // There're no tasks to do
     // TODO: Attempt to take other thread's tasks.

@@ -470,7 +470,7 @@
 
 #      define TM_PARTITION(min, max, startPtr, stopPtr)  do { \
                                                               sigjmp_buf *_tq_start = stm_task_queue_start(); \
-                                                              stm_task_queue_partition(min, max, 10); \
+                                                              stm_task_queue_partition(min, max, 16); \
                                                               if (_tq_start != NULL) sigsetjmp(*_tq_start, 0); \
                                                               stm_task_queue_get(startPtr, stopPtr); \
                                                             } while(0)

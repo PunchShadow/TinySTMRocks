@@ -1659,7 +1659,7 @@ int_stm_task_queue_victim_select(stm_tx_t *t)
   long victim_nb;
   
   /* If there's only one task queue. */
-  if (thread_nb) return self_num;
+  if (thread_nb == 1) return self_num;
   
   do {
     victim_nb = rand() % thread_nb;
@@ -1721,7 +1721,7 @@ int_stm_task_queue_register(stm_tx_t *t)
 }
 
 static INLINE void
-int_stm_task_queue_push(stm_tx_t *t, ws_task* ws_task)
+int_stm_task_queue_enqueue(stm_tx_t *t, ws_task* ws_task)
 {
   
   //pthread_t this_thread_id = pthread_self();
@@ -1734,7 +1734,7 @@ int_stm_task_queue_push(stm_tx_t *t, ws_task* ws_task)
 }
 
 static INLINE ws_task*
-int_stm_task_queue_pop(stm_tx_t *t)
+int_stm_task_queue_dequeue(stm_tx_t *t)
 {
   ws_task* task_ptr;
   //pthread_t this_thread_id = pthread_self();
@@ -1744,16 +1744,21 @@ int_stm_task_queue_pop(stm_tx_t *t)
   size_t num_task;
   //assert(_tinystm.task_queue_info[tp]->thread_id == this_thread_id);
 
-  task_ptr =  ws_task_queue_pop(_tinystm.task_queue_info[tp]->task_queue, &num_task);
-  PRINT_DEBUG("==> stm_task_queue_pop[%lu, %ld]\n", tp, num_task);
+  task_ptr =  ws_task_queue_take(_tinystm.task_queue_info[tp]->task_queue, &num_task);
+  PRINT_DEBUG("==> stm_task_dequeue[%lu, %ld]\n", tp, num_task);
   /* If task queue is empty, taking tasks from other threads */
   if (!task_ptr) {
     do {
       // Select victim thread & take task from the thread
       victim_nb = int_stm_task_queue_victim_select(t);
-      task_ptr = ws_task_queue_take(_tinystm.task_queue_info[victim_nb]->task_queue);
-      retry_time ++;
-      printf("retry_time: %d\n", retry_time);
+      if (ws_task_isEmpty(_tinystm.task_queue_info[victim_nb]->task_queue)) {
+        retry_time ++;
+        printf("retry_time: %d, victim: %ld\n", retry_time, victim_nb);
+        continue;
+      } else {
+        task_ptr = ws_task_queue_pop(_tinystm.task_queue_info[victim_nb]->task_queue, &num_task);
+      }
+      
     } while ((task_ptr == NULL) & (retry_time < _tinystm.task_queue_retry_time));
   } 
   // task_ptr may be NULL since reaching max retry time

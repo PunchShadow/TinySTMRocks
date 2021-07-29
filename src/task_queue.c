@@ -14,7 +14,7 @@ ws_task_queue_new()
 
     ws_tq->_task_queue = ws_task_circular_array_new(WS_TASK_QUEUE_INIT_SIZE);
     ws_tq->_top = 0;
-    ws_tq->_bottom = 1;
+    ws_tq->_bottom = 0;
 
     return ws_tq;
 }
@@ -85,27 +85,38 @@ ws_task_queue_pop(ws_task_queue* ws_tq, size_t* task_num)
 }
 
 ws_task* 
-ws_task_queue_take(ws_task_queue* victim)
+ws_task_queue_take(ws_task_queue* ws_tq, size_t* num_task)
 {
-  size_t old_top, new_top;
-  size_t old_bottom;
-  size_t num_tasks;
+    size_t old_top, new_top;
+    size_t old_bottom;
+    size_t num_tasks;
 
-  __sync_synchronize();  /* _top and _bottom can be changed by pop/push */
-  old_top = victim->_top;
-  old_bottom = victim->_bottom;
-  new_top = old_top + 1;
-  num_tasks = old_bottom - old_top;
+    __sync_synchronize();  /* _top and _bottom can be changed by pop/push */
+    old_top = ws_tq->_top;
+    old_bottom = ws_tq->_bottom;
+    new_top = old_top + 1;
+    num_tasks = old_bottom - old_top;
+    *num_task = num_tasks;
 
-  if (__builtin_expect(num_tasks <= 0, 0))
-    return NULL;
+    if (__builtin_expect(num_tasks <= 0, 0))
+    
+        return NULL;
 
-  __sync_synchronize();  /* _top can be incremented by pop. */
-  if (!__sync_bool_compare_and_swap(&victim->_top, old_top, new_top))
-    /* pop() already took the task */
-    return NULL;
-  else
-    return ws_task_circular_array_get(victim->_task_queue, old_top);
+    __sync_synchronize();  /* _top can be incremented by pop. */
+    if (!__sync_bool_compare_and_swap(&ws_tq->_top, old_top, new_top))
+        /* pop() already took the task */
+        return NULL;
+    else
+        return ws_task_circular_array_get(ws_tq->_task_queue, old_top);
 }
+
+
+int 
+ws_task_isEmpty(ws_task_queue* ws_tq)
+{
+    size_t localTop = ws_tq->_top;
+    size_t localBottom = ws_tq->_bottom;
+    return (localBottom <= localTop);
+} 
 
 
