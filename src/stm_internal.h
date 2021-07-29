@@ -1657,10 +1657,13 @@ int_stm_task_queue_victim_select(stm_tx_t *t)
   long thread_nb = _tinystm.task_queue_nb;
   long self_num = t->task_queue_position;
   long victim_nb;
-  time_t tt;
-  srand((unsigned) time(&tt));
+  
+  /* If there's only one task queue. */
+  if (thread_nb) return self_num;
+  
   do {
-    victim_nb = random() % thread_nb;
+    victim_nb = rand() % thread_nb;
+    PRINT_DEBUG("victim_nb: (%lu,%lu)\n", victim_nb, self_num);
   } while (victim_nb == self_num);
 
   PRINT_DEBUG("==>stm_task_queue_victim_select(%lu)\n", victim_nb);
@@ -1738,10 +1741,11 @@ int_stm_task_queue_pop(stm_tx_t *t)
   long tp = t->task_queue_position;
   long victim_nb;
   int retry_time = 0;
+  size_t num_task;
   //assert(_tinystm.task_queue_info[tp]->thread_id == this_thread_id);
 
-  task_ptr =  ws_task_queue_pop(_tinystm.task_queue_info[tp]->task_queue);
-
+  task_ptr =  ws_task_queue_pop(_tinystm.task_queue_info[tp]->task_queue, &num_task);
+  PRINT_DEBUG("==> stm_task_queue_pop[%lu, %ld]\n", tp, num_task);
   /* If task queue is empty, taking tasks from other threads */
   if (!task_ptr) {
     do {

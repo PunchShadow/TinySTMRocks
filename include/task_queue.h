@@ -113,7 +113,7 @@ void ws_task_queue_delete(ws_task_queue* ws_tq);
 
 void ws_task_queue_push(ws_task_queue* ws_tq, ws_task* ws_task);
 
-ws_task* ws_task_queue_pop(ws_task_queue* ws_tq);
+ws_task* ws_task_queue_pop(ws_task_queue* ws_tq, size_t* num_task);
 
 ws_task* ws_task_queue_take(ws_task_queue* victim);
 

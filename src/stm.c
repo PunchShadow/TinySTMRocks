@@ -1131,7 +1131,7 @@ stm_task_queue_partition(long min, long max, long stride)
   for (long i = start; i < stop; i += (stride+1)) {
     long end  = MIN(stop, (i + stride));
     ws_task* task_ptr = ws_task_create(i, end);
-    PRINT_DEBUG("==>TM_PARTITION(%lu, %lu)\n", i, end);
+    PRINT_DEBUG("==> TM_PARTITION[%lu](%lu, %lu)\n", position, i, end);
     int_stm_task_queue_push(tx, task_ptr);
   }
 
@@ -1148,7 +1148,6 @@ stm_task_queue_get(long* startPtr, long* stopPtr)
     *startPtr = task_ptr->start;
     *stopPtr = task_ptr->end;
   } else {
-    printf("There's no tasks to do\n");
     // There're no tasks to do
     // TODO: Attempt to take other thread's tasks.
     // TODO: Jump to the end of TM_THREAD_EXIT()
