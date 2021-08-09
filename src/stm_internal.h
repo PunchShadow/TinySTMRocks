@@ -1652,7 +1652,8 @@ int_stm_get_specific(stm_tx_t *tx, int key)
 static INLINE long
 int_stm_task_queue_victim_select(stm_tx_t *t)
 {
-  // TODO: Use proflie information to choose the victim thread.
+  // TODO: BETTER SELECT METHODS. 
+  // Maybe use proflie information to choose the victim thread.
   // Temporally use random selection instead.
   long thread_nb = _tinystm.task_queue_nb;
   long self_num = t->task_queue_position;
@@ -1663,10 +1664,9 @@ int_stm_task_queue_victim_select(stm_tx_t *t)
   
   do {
     victim_nb = rand() % thread_nb;
-    PRINT_DEBUG("victim_nb: (%lu,%lu)\n", victim_nb, self_num);
   } while (victim_nb == self_num);
 
-  PRINT_DEBUG("==>stm_task_queue_victim_select(%lu)\n", victim_nb);
+  //PRINT_DEBUG("==>stm_task_queue_victim_select[%lu, %lu]\n", self_num, victim_nb);
   return victim_nb;
 }
 
@@ -1690,8 +1690,16 @@ int_stm_task_queue_exit()
   PRINT_DEBUG("==>stm_task_queue_exit\n");
 
   long numThread = _tinystm.task_queue_nb;
+  ws_task_queue* tmp;
+  ws_task_queue* cur;
   for (long i=0; i < numThread; i++) {
-    ws_task_queue_delete(_tinystm.task_queue_info[i]->task_queue);
+    cur = _tinystm.task_queue_info[i]->task_queue;
+    // Free the multiple queues in one thread.
+    do {
+      tmp = cur->next;
+      ws_task_queue_delete(cur);
+      cur = tmp;
+    } while(tmp != NULL);
     free(_tinystm.task_queue_info[i]);
   }
   free(_tinystm.task_queue_info);
@@ -1716,25 +1724,45 @@ int_stm_task_queue_register(stm_tx_t *t)
       t->task_queue_position = i;
       PRINT_DEBUG("==>stm_task_queue_register(%lu, [%p])\n", thread_id, _tinystm.task_queue_info[i]->task_queue);
       break;
+    } else { // Second time register to find its own queue
+      if (_tinystm.task_queue_info[i]->thread_id == thread_id) {
+        t->task_queue_position = i;
+        PRINT_DEBUG("==>stm_task_queue_Reregister(%lu, [%p])\n", thread_id, _tinystm.task_queue_info[i]->task_queue);
+      }
     }
   }
 }
 
 static INLINE void
-int_stm_task_queue_enqueue(stm_tx_t *t, ws_task* ws_task)
+int_stm_task_queue_enqueue(stm_tx_t *t, ws_task* ws_task, int version)
 {
+  size_t num_task;
   
   //pthread_t this_thread_id = pthread_self();
   long tp = t->task_queue_position;
   ws_task_queue* tq = _tinystm.task_queue_info[tp]->task_queue;
   //assert(_tinystm.task_queue_info[tp]->thread_id == this_thread_id);
-
-  ws_task_queue_push(tq, ws_task);
-  //PRINT_DEBUG("==>stm_task_push_queue_size(%llu)\n", ws_task_circular_array_size(tq->_task_queue));
+  ws_task_queue* tmp = _tinystm.task_queue_info[tp]->task_queue;
+  
+  /* Check the task version is match to the task queue version. */
+  while (tq != NULL) {
+    if (version == tq->taskNum) break;
+    else {
+      tmp = tq;
+      tq = tq->next;
+    }
+  }
+  /* There is no match task queue, create a new one. */
+  if (tq == NULL) {
+    tq = ws_task_queue_new(version);
+    tmp->next = tq;
+  }
+  ws_task_queue_push(tq, ws_task, &num_task);
+  PRINT_DEBUG("==> stm_task_enqueue[(%lu.%d), %ld]\n", tp, version,  num_task);
 }
 
 static INLINE ws_task*
-int_stm_task_queue_dequeue(stm_tx_t *t)
+int_stm_task_queue_dequeue(stm_tx_t *t, int version)
 {
   ws_task* task_ptr;
   //pthread_t this_thread_id = pthread_self();
@@ -1743,9 +1771,21 @@ int_stm_task_queue_dequeue(stm_tx_t *t)
   int retry_time = 0;
   size_t num_task;
   //assert(_tinystm.task_queue_info[tp]->thread_id == this_thread_id);
+ 
+  ws_task_queue* tq = _tinystm.task_queue_info[tp]->task_queue;
 
-  task_ptr =  ws_task_queue_take(_tinystm.task_queue_info[tp]->task_queue, &num_task);
-  PRINT_DEBUG("==> stm_task_dequeue[%lu, %ld]\n", tp, num_task);
+  /* Check the task number. */
+  while (tq != NULL) {
+    if (version == tq->taskNum) break;
+    else {
+      tq = tq->next;
+    }
+  }
+  assert((tq != NULL) && "There is no such version of tasks");
+
+
+  task_ptr =  ws_task_queue_take(tq, &num_task);
+  
   /* If task queue is empty, taking tasks from other threads */
   if (!task_ptr) {
     do {
@@ -1753,14 +1793,29 @@ int_stm_task_queue_dequeue(stm_tx_t *t)
       victim_nb = int_stm_task_queue_victim_select(t);
       if (ws_task_isEmpty(_tinystm.task_queue_info[victim_nb]->task_queue)) {
         retry_time ++;
-        printf("retry_time: %d, victim: %ld\n", retry_time, victim_nb);
+        //printf("retry_time: %d, victim: %ld\n", retry_time, victim_nb);
         continue;
       } else {
-        task_ptr = ws_task_queue_pop(_tinystm.task_queue_info[victim_nb]->task_queue, &num_task);
+        ws_task_queue* victim_tq = _tinystm.task_queue_info[victim_nb]->task_queue;
+        while (victim_tq != NULL) {
+          if (version == victim_tq->taskNum) break;
+          else {
+            victim_tq = victim_tq->next;
+          }
+        }
+        task_ptr = ws_task_queue_pop(victim_tq, &num_task);
       }
       
     } while ((task_ptr == NULL) & (retry_time < _tinystm.task_queue_retry_time));
-  } 
+    /* For debug functions. */
+    if (task_ptr == NULL) {
+      PRINT_DEBUG("==> stm_task_Pop_Fail[(%lu.%d), %ld]\n", tp, version, num_task);
+    } else {
+      PRINT_DEBUG("==> stm_task_Pop_Success[(%lu.%d), %ld]\n", tp, version, num_task);
+    }
+  } else {
+    PRINT_DEBUG("==> stm_task_Take[(%lu.%d), %ld]\n", tp, version, num_task);
+  }
   // task_ptr may be NULL since reaching max retry time
   return task_ptr;
 }

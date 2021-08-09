@@ -1132,17 +1132,17 @@ stm_task_queue_partition(long min, long max, long stride)
     long end  = MIN(stop, (i + stride));
     ws_task* task_ptr = ws_task_create(i, end);
     PRINT_DEBUG("==> TM_PARTITION[%lu](%lu, %lu)\n", position, i, end);
-    int_stm_task_queue_enqueue(tx, task_ptr);
+    int_stm_task_queue_enqueue(tx, task_ptr, 0);
   }
 
 }
 
 _CALLCONV void
 stm_task_queue_get(long* startPtr, long* stopPtr)
-{
+{ 
   TX_GET;
   ws_task* task_ptr;
-  task_ptr = int_stm_task_queue_dequeue(tx);
+  task_ptr = int_stm_task_queue_dequeue(tx, 0);
   // Normal execution
   if (task_ptr != NULL) {
     *startPtr = task_ptr->start;
@@ -1156,6 +1156,27 @@ stm_task_queue_get(long* startPtr, long* stopPtr)
   }
 
 }
+
+_CALLCONV void
+stm_TaskPush(void* data, int ver)
+{
+  TX_GET;
+  ws_task* taskPtr = gws_task_create(data);
+  //PRINT_DEBUG("==> stm_TaskPush[%lu] ver: %d\n", tx->task_queue_position, ver);
+  int_stm_task_queue_enqueue(tx, taskPtr, ver);
+}
+
+_CALLCONV void*
+stm_TaskPop(int ver)
+{
+  TX_GET;
+  ws_task* taskPtr;
+  //PRINT_DEBUG("==> stm_TaskPop[%lu] ver: %d\n", tx->task_queue_position, ver);
+  taskPtr = int_stm_task_queue_dequeue(tx, ver);
+  if (taskPtr == NULL) return NULL;
+  return taskPtr->data;
+}
+
 
 
 #ifdef WORK_STEALING

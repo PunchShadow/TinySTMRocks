@@ -13,11 +13,15 @@ extern "C" {
 
 #define WS_TASK_QUEUE_INIT_SIZE 20480
 
+typedef struct ws_task_queue ws_task_queue;
+
 
 typedef struct ws_task {
     /* Partition start and end number */
     long start;
     long end;
+    void* data;
+
     /*
     struct ws_task* parent;
     struct ws_task** child; 
@@ -35,6 +39,9 @@ typedef struct ws_task_queue {
     struct ws_task_circular_array* _task_queue;
     volatile size_t _top;
     volatile size_t _bottom;
+    /* For multiple task queues */
+    int taskNum;
+    ws_task_queue* next;
 } ws_task_queue;
 
 static inline ws_task*
@@ -46,6 +53,15 @@ ws_task_create(long start, long stop)
     task_ptr->end = stop;
     
     return task_ptr;
+}
+
+static inline ws_task*
+gws_task_create(void* data)
+{
+    ws_task* taskPtr;
+    taskPtr = malloc(sizeof(ws_task));
+    taskPtr->data = data;
+    return taskPtr;
 }
 
 
@@ -107,11 +123,11 @@ ws_task_circular_array_size(ws_task_circular_array* ws_array)
 
 
 /* Task queue methods */
-ws_task_queue* ws_task_queue_new();
+ws_task_queue* ws_task_queue_new(int taskNum);
 
 void ws_task_queue_delete(ws_task_queue* ws_tq);
 
-void ws_task_queue_push(ws_task_queue* ws_tq, ws_task* ws_task);
+void ws_task_queue_push(ws_task_queue* ws_tq, ws_task* ws_task, size_t* num_task);
 
 // Pop the BOTTOM from queue
 ws_task* ws_task_queue_pop(ws_task_queue* ws_tq, size_t* num_task);

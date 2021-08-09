@@ -475,6 +475,10 @@
                                                               stm_task_queue_get(startPtr, stopPtr); \
                                                             } while(0)
 
+#      define TM_TaskPush(data, ver)    stm_TaskPush(data, ver)
+
+#      define TM_TaskPop(ver)           stm_TaskPop(ver);
+
 #    endif /* !OTM */
 
 #  endif /* !SIMULATOR */

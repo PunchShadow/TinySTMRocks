@@ -17,7 +17,7 @@ ws_task_queue*
 mod_dp_task_queue_init(void)
 {
     ws_task_queue* ws_tq;
-    ws_tq = ws_task_queue_new();
+    ws_tq = ws_task_queue_new(0);
     return ws_tq;
 }
 
