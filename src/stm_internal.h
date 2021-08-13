@@ -36,6 +36,7 @@
 #include "profile.h"
 #include "mod_dp.h" /* Work-stealing */
 #include "task_queue.h" 
+#include "aco.h" /* CM_COROUTINE */
 
 /* ################################################################### *
  * DEFINES
@@ -56,6 +57,7 @@
 #define CM_DELAY                        1
 #define CM_BACKOFF                      2
 #define CM_MODULAR                      3
+#define CM_COROUTINE                    4
 
 #ifndef CM
 # define CM                             CM_SUICIDE
@@ -110,6 +112,13 @@
 #  define VR_THRESHOLD_DEFAULT          3                   /* -1 means no visible reads. 0 means always use visible reads. */
 # endif /* VR_THRESHOLD_DEFAULT */
 #endif /* CM == CM_MODULAR */
+
+#if CM == CM_COROUTINE
+# ifndef WORK_STEALING                                      /* Coroutine should work with work stealing task queue. */
+#   define WORK_STEALING
+# endif /* WORK_STEALING */
+#endif /* CM == CM_COROUTINE */
+
 
 #define NO_SIGNAL_HANDLER               "NO_SIGNAL_HANDLER"
 
@@ -348,6 +357,16 @@ typedef struct stm_tx {                 /* Transaction descriptor */
 #if CM == CM_MODULAR || defined(TM_STATISTICS)
   unsigned int stat_retries;            /* Number of consecutive aborts (retries) */
 #endif /* CM == CM_MODULAR || defined(TM_STATISTICS) */
+#if CM == CM_COROUTINE
+  aco_t *main_co;                        /* Main coroutine */
+  aco_share_stack_t *sstk;               /* Shared stack of coroutines */
+  aco_t **co;                            /* Array of non-main coroutines. */
+  int is_co;                             /* Identify is in non-main coroutine or not */
+  int co_nb;                             /* Number of pending non-main coroutines */
+  int co_max;                            /* Maximum number of coroutines. */
+  void (*coro_func)(void);               /* Coroutine function pointers. */
+  void *coro_arg;                        /* Coroutine function argument */
+#endif /* CM == CM_COROUTINE */
 #ifdef TM_STATISTICS
   unsigned int stat_commits;            /* Total number of commits (cumulative) */
   unsigned int stat_aborts;             /* Total number of aborts (cumulative) */
@@ -364,6 +383,7 @@ typedef struct stm_tx {                 /* Transaction descriptor */
 #endif /* TM_STATISTICS2 */
 #ifdef WORK_STEALING
   long task_queue_position;             /* The position number corresponding to _tinystm.task_queue_info array*/
+  int cur_task_version;                 /* Current working task version */
   JMP_BUF task_queue_start;             /* Store the start of TM_PARTITION() */
   JMP_BUF task_queue_end;               /* Store the end of TM_THREAD_EXIT() */
 #endif /* WORK_STEALING */
@@ -408,7 +428,6 @@ typedef struct {
 #ifdef HELPER_THREAD
   pthread_t monitor_thread;              /* Record the monitor_thread address */
 #endif /* HELPER_THREAD */
-
   thread_task_queue_info** task_queue_info; /* Each threads task queue info */
   unsigned long task_queue_nb;
   int task_queue_retry_time;
@@ -439,6 +458,20 @@ extern global_t _tinystm;
 static NOINLINE void
 stm_rollback(stm_tx_t *tx, unsigned int reason);
 
+static INLINE void
+int_stm_task_queue_register(stm_tx_t *t);
+
+static INLINE void
+int_stm_non_main_coro_exit(stm_tx_t *tx);
+
+static INLINE void
+int_stm_coro_CM(stm_tx_t *tx);
+
+static INLINE void
+int_stm_main_coro_init(stm_tx_t *tx, int coro_max);
+
+static INLINE void
+int_stm_coro_exit(stm_tx_t *tx);
 
 /* ################################################################### *
  * INLINE FUNCTIONS
@@ -1080,6 +1113,10 @@ stm_rollback(stm_tx_t *tx, unsigned int reason)
   /* Reset field to restart transaction */
   int_stm_prepare(tx);
 
+#if CM == CM_COROUTINE
+  int_stm_coro_CM(tx);
+#endif /* CM == CM_COROUTINE */
+
   /* Jump back to transaction start */
   /* Note: ABI usually requires 0x09 (runInstrumented+restoreLiveVariable) */
 #ifdef IRREVOCABLE_ENABLED
@@ -1210,8 +1247,10 @@ int_stm_init_thread(void)
   PRINT_DEBUG("==> stm_init_thread()\n");
 
   /* Avoid initializing more than once */
-  if ((tx = tls_get_tx()) != NULL)
+  if ((tx = tls_get_tx()) != NULL) {
+    PRINT_DEBUG("==> stm_init_thread: more than once!!!!\n");
     return tx;
+  }
 
 #ifdef EPOCH_GC
   gc_init_thread();
@@ -1258,6 +1297,18 @@ int_stm_init_thread(void)
   tx->visible_reads = 0;
   tx->timestamp = 0;
 #endif /* CM == CM_MODULAR */
+#ifdef WORK_STEALING
+# if CM == CM_COROUTINE
+  /* Only register task queue in main coroutine */
+  if (tx->main_co == NULL) int_stm_task_queue_register(tx);
+# else /* ! CM == CM_COROUTINE */
+  int_stm_task_queue_register(tx);
+# endif /* CM == CM_COROUTINE */
+#endif /* WORK_STEALING */
+#if CM == CM_COROUTINE
+  /* Only initialize at main coroutine */
+  if (tx->main_co == NULL)  int_stm_main_coro_init(tx, 2); // Defaut coroutine number is 2.
+#endif /* CM == CM_COROUTINE */
 #if CM == CM_MODULAR || defined(TM_STATISTICS)
   tx->stat_retries = 0;
 #endif /* CM == CM_MODULAR || defined(TM_STATISTICS) */
@@ -1281,7 +1332,12 @@ int_stm_init_thread(void)
 #endif /* IRREVOCABLE_ENABLED */
   /* Store as thread-local data */
   tls_set_tx(tx);
+
+#if CM == CM_COROUTINE
+  if (!tx->is_co)  stm_quiesce_enter_thread(tx);
+#else /* ! CM == CM_COROUTINE */
   stm_quiesce_enter_thread(tx);
+#endif /* CM == CM_COROUTINE */
 
   /* Callbacks */
   if (likely(_tinystm.nb_init_cb != 0)) {
@@ -1312,6 +1368,11 @@ int_stm_exit_thread(stm_tx_t *tx)
       _tinystm.exit_cb[cb].f(_tinystm.exit_cb[cb].arg);
   }
 
+#if CM == CM_COROUTINE
+  if (tx->is_co) int_stm_non_main_coro_exit(tx);
+  else int_stm_coro_exit(tx);
+#endif /* CM == CM_COROUTINE */
+
 #ifdef TM_STATISTICS
   /* Display statistics before to lose it */
   if (getenv("TM_STATISTICS") != NULL) {
@@ -1335,7 +1396,6 @@ int_stm_exit_thread(stm_tx_t *tx)
   xfree(tx->w_set.entries);
   xfree(tx);
 #endif /* ! EPOCH_GC */
-
   tls_set_tx(NULL);
 }
 
@@ -1722,6 +1782,7 @@ int_stm_task_queue_register(stm_tx_t *t)
       _tinystm.task_queue_info[i]->thread_id = thread_id;
       // Register the task queue position to transaction descriptor
       t->task_queue_position = i;
+      t->cur_task_version = 0;
       PRINT_DEBUG("==>stm_task_queue_register(%lu, [%p])\n", thread_id, _tinystm.task_queue_info[i]->task_queue);
       break;
     } else { // Second time register to find its own queue
@@ -1729,6 +1790,7 @@ int_stm_task_queue_register(stm_tx_t *t)
         t->task_queue_position = i;
         PRINT_DEBUG("==>stm_task_queue_Reregister(%lu, [%p])\n", thread_id, _tinystm.task_queue_info[i]->task_queue);
       }
+      break;
     }
   }
 }
@@ -1787,7 +1849,7 @@ int_stm_task_queue_dequeue(stm_tx_t *t, int version)
   task_ptr =  ws_task_queue_take(tq, &num_task);
   
   /* If task queue is empty, taking tasks from other threads */
-  if (!task_ptr) {
+  if (task_ptr == NULL) {
     do {
       // Select victim thread & take task from the thread
       victim_nb = int_stm_task_queue_victim_select(t);
@@ -1817,6 +1879,7 @@ int_stm_task_queue_dequeue(stm_tx_t *t, int version)
     PRINT_DEBUG("==> stm_task_Take[(%lu.%d), %ld]\n", tp, version, num_task);
   }
   // task_ptr may be NULL since reaching max retry time
+  t->cur_task_version = version;
   return task_ptr;
 }
 
@@ -1846,6 +1909,165 @@ int_stm_task_queue_end(stm_tx_t *tx)
   printf("===>stm_task_queue_end\n");
   return &tx->task_queue_end;
 }
+
+/*
+* ###########################################################
+* # CM_COROUTINE
+* ############################################################
+*/
+#if CM == CM_COROUTINE
+
+static INLINE void
+int_stm_main_coro_init(stm_tx_t *tx, int coro_max)
+{
+  aco_thread_init(NULL);
+  tx->main_co = aco_create(NULL, NULL, 0, NULL, NULL);
+  tx->sstk = aco_share_stack_new(0);
+  assert(tx->co_max != NULL);
+  tx->co = malloc(sizeof(aco_t*) * tx->co_max);
+  tx->co_nb = 0;
+  tx->co_max = coro_max;
+  tx->coro_func = NULL;
+  tx->coro_arg = NULL;
+  tx->is_co = 0;
+}
+
+
+/* Find a blank in tx->co to register non-main coroutine 
+  @param coro_func: function pointer of coroutine.
+  @param coro_arg:  argument passed to coroutine. 
+*/
+static INLINE aco_t*
+int_stm_non_main_coro_create(stm_tx_t *tx, void (*coro_func)(), void* coro_arg)
+{
+  aco_t* tmp = tx->co[0];
+  while(tmp != NULL) tmp++;
+  tmp = aco_create(tx->main_co, tx->sstk, 0, coro_func, coro_arg);
+  tx->co_nb++;
+  return tmp;
+}
+
+
+/* Called by non-main coroutines */
+static INLINE void
+int_stm_non_main_coro_exit(stm_tx_t *tx)
+{
+  aco_exit();
+}
+
+
+/* Called by main thread */
+static INLINE void
+int_stm_coro_exit(stm_tx_t *tx)
+{
+  if (tx->coro_func == NULL) return;
+  /* Destory all non-main coroutines */
+  for(int i = 0; (i < tx->co_max) || tx->co[i] != NULL; i++) {
+    aco_destroy(tx->co[i]);
+    tx->co[i] = NULL;
+  }
+  free(tx->co);
+
+  aco_share_stack_destroy(tx->sstk);
+  tx->sstk = NULL;
+
+  aco_destroy(tx->main_co);
+  tx->main_co = NULL;
+
+  tx->coro_func = NULL;
+  tx->coro_arg = NULL;
+}
+
+
+/* TODO: Find the best coroutine among tx to execute */
+static INLINE void
+int_stm_coro_resume(stm_tx_t* tx, aco_t *co)
+{
+  PRINT_DEBUG("==> Main resume [%p]\n", co);
+  assert(tx->is_co == 0 && "Resume should be called by main coro\n");
+  tx->is_co = 1;
+  aco_resume(co);
+}
+
+
+static INLINE void
+int_stm_coro_yield(stm_tx_t* tx)
+{
+  aco_t* co = aco_get_co();
+  assert(tx->is_co == 1  && "Yield should be called by non-main coros\n");
+  PRINT_DEBUG("==> Coro yield from [%p]\n", co);
+  tx->is_co = 0; 
+  aco_yield(); 
+}
+
+static INLINE void
+int_stm_coro_non_main_coro_exit()
+{
+  aco_t* co = aco_get_co();
+  assert(co != NULL && "Yield should be called by non-main coros\n");
+  PRINT_DEBUG("==> Coro exit [%p]\n", co);
+  aco_exit();
+}
+
+
+static INLINE void
+int_stm_coro_func_register(stm_tx_t *tx, void (*coro_func)(), void* coro_arg)
+{
+  // If in coroutine code -> not to register again.
+  if (tx->is_co == 1) return;
+  tx->coro_func = coro_func;
+  tx->coro_arg = coro_arg;
+}
+
+
+
+static INLINE void
+int_stm_coro_CM(stm_tx_t *tx)
+{ 
+  aco_t* switch_co = NULL;
+  
+  /* If the caller is main coroutine */
+  if (tx->is_co == 0) {
+      /* Choose a coroutine to execute */
+    for(int i=0; i < tx->co_nb; i++) {
+      if (tx->co[i] == NULL) continue;
+      if (!(tx->co[i]->is_end)) switch_co = tx->co[i];
+    }
+
+    /* No pending non-main coroutine. 
+       Create a new cor from popping out the task queue.
+    */
+    if (switch_co == NULL) {
+      // TODO: need to find a good way to import coroutine function pointer.
+      switch_co = aco_create(tx->main_co, tx->sstk, 0, tx->coro_func, tx->coro_arg);
+      tx->co[0] = switch_co; 
+    }
+
+    /* Resume non-main coroutine and return*/
+    int_stm_coro_resume(tx, switch_co);
+
+  } else {
+    /* Caller is non-main coroutine */
+    int_stm_coro_yield(tx);
+  }
+  
+}
+
+static INLINE int
+int_is_Main_coro(stm_tx_t* tx)
+{
+  return tx->is_co;
+}
+
+static INLINE void*
+int_stm_get_coro_arg(stm_tx_t* tx)
+{
+  return tx->coro_arg;
+}
+
+
+#endif /* CM == CM_COROUTINE */
+
 
 
 #ifdef WORK_STEALING

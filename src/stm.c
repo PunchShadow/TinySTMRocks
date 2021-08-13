@@ -1178,6 +1178,36 @@ stm_TaskPop(int ver)
 }
 
 
+#if CM == CM_COROUTINE
+
+_CALLCONV int
+stm_isMain_coro()
+{
+  TX_GET;
+  return int_is_Main_coro(tx);
+}
+
+/* Specify coroutine function and its argrument with corresponding task version*/
+_CALLCONV void
+stm_coroutine_register(void (*func)(), void* arg)
+{
+  TX_GET;
+  int_stm_coro_func_register(tx, func, arg);
+}
+
+_CALLCONV void*
+stm_get_coro_arg()
+{
+  TX_GET;
+  return int_stm_get_coro_arg(tx);
+}
+
+
+
+#endif /* CM == CM_COROUTINE */
+
+
+
 
 #ifdef WORK_STEALING
 

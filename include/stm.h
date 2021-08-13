@@ -718,6 +718,16 @@ void* stm_TaskPop(int ver);
 sigjmp_buf *stm_task_queue_start(void);
 sigjmp_buf *stm_task_queue_end(void);
 
+/* ################################################################### *
+ * CM_COROUTINE
+ * ################################################################### */
+
+int stm_isMain_coro(void) _CALLCONV;
+ 
+void stm_coroutine_register(void (*func)(), void* arg) _CALLCONV;
+
+void* stm_get_coro_arg(void) _CALLCONV;
+
 
 #ifdef __cplusplus
 }

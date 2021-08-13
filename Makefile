@@ -75,10 +75,11 @@ DEFINES += -DDESIGN=WRITE_BACK_ETL
 ########################################################################
 
 # Pick one contention manager (CM)
-DEFINES += -DCM=CM_SUICIDE
+# DEFINES += -DCM=CM_SUICIDE
 # DEFINES += -DCM=CM_DELAY
 # DEFINES += -DCM=CM_BACKOFF
 # DEFINES += -DCM=CM_MODULAR
+DEFINES += -DCM=CM_COROUTINE
 
 ########################################################################
 # Enable irrevocable mode (required for using the library with a
@@ -289,7 +290,7 @@ else
   GC :=
 endif
 
-CPPFLAGS += -I$(SRCDIR) -I$(PCMDIR)
+CPPFLAGS += -I$(SRCDIR) -I$(PCMDIR) -I$(CORDIR)
 CPPFLAGS += $(DEFINES)
 
 MODULES := $(patsubst %.c,%.o,$(wildcard $(SRCDIR)/mod_*.c))
@@ -310,6 +311,13 @@ helper_thread.o: helper_thread.c
 task_queue.o: task_queue.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -DCOMPILE_FLAGS="$(CPPFLAGS) $(CFLAGS)" -c -o src/task_queue.o src/task_queue.c
 
+# CM_COROUTINE
+aco.o: $(CORDIR)/aco.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) -DCOMPILE_FLAGS="$(CPPFLAGS) $(CFLAGS)" -c -o $(CORDIR)/aco.o $(CORDIR)/aco.c
+
+acosw.o: $(CORDIR)/acosw.S
+	$(CC) $(CPPFLAGS) $(CFLAGS) -DCOMPILE_FLAGS="$(CPPFLAGS) $(CFLAGS)" -c -o $(CORDIR)/acosw.o $(CORDIR)/acosw.S
+
 
 # Additional dependencies
 $(SRCDIR)/stm.o:	$(INCDIR)/stm.h $(INCDIR)/helper_thread.h $(INCDIR)/task_queue.h
@@ -322,7 +330,7 @@ $(SRCDIR)/stm.o:	$(SRCDIR)/stm_internal.h $(SRCDIR)/stm_wt.h $(SRCDIR)/stm_wbetl
 	$(UNIFDEF) $(D) $< > $@ || true
 
 # Link additional PCM object $(PCMOBJ) to libstm.a
-$(TMLIB):	$(SRCDIR)/$(TM).o $(SRCDIR)/wrappers.o $(SRCDIR)/helper_thread.o $(PCMOBJ) $(WSOBJ) $(GC) $(MODULES)
+$(TMLIB):	$(SRCDIR)/$(TM).o $(COROBJ) $(SRCDIR)/wrappers.o $(SRCDIR)/helper_thread.o $(PCMOBJ) $(WSOBJ) $(GC) $(MODULES)
 	$(AR) crus $@ $^
 
 test:	$(TMLIB)

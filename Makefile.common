@@ -31,8 +31,9 @@ PMCOBJ += $(PCMLIB)/threadpool.o $(PCMLIB)/resctrl.o $(PCMLIB)/msr.o -pthread -l
 # Work-stealing
 WSOBJ = $(ROOT)/src/task_queue.o
 
-
-
+# CM_COROUTINE
+CORDIR = $(ROOT)/libaco
+COROBJ = $(CORDIR)/aco.o $(CORDIR)/acosw.o
 
 # Supposing all compilers has -I -L
 # TODO -I$(SRCDIR) only for library build

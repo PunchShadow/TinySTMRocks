@@ -442,12 +442,9 @@
                                         stm_task_queue_exit(); \
                                         stm_exit()
 
-#      define TM_THREAD_ENTER()         do { \
-                                            stm_init_thread(); \
-                                            stm_task_queue_register(); \
-                                        } while(0)
+#      define TM_THREAD_ENTER()         stm_init_thread();
 
-
+/* Jump to TM_PARTITION() and restart the task */
 #      define TM_THREAD_EXIT2()         do { \
                                             sigjmp_buf *_tq_end = stm_task_queue_end();\
                                             if (_tq_end != NULL) { \
@@ -461,7 +458,7 @@
                                         } while(0)
 
 #      define TM_THREAD_EXIT()          stm_exit_thread()
-                                        
+
 
 #      define P_MALLOC(size)            malloc(size)
 #      define P_FREE(ptr)               free(ptr)
@@ -477,7 +474,11 @@
 
 #      define TM_TaskPush(data, ver)    stm_TaskPush(data, ver)
 
-#      define TM_TaskPop(ver)           stm_TaskPop(ver);
+#      define TM_TaskPop(ver)           stm_TaskPop(ver)
+
+#      define TM_Coroutine(func, arg)   stm_coroutine_register(func, arg); \
+                                        if(!stm_isMain_coro()) arg = stm_get_coro_arg() 
+
 
 #    endif /* !OTM */
 
