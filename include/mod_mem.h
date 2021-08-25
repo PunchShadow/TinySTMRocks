@@ -123,6 +123,13 @@ void stm_free2_tx(struct stm_tx *tx, void *addr, size_t idx, size_t size);
  */
 void mod_mem_init(int gc);
 
+
+/* CM_COROUTINE */
+void mod_mem_coro_init(void);
+
+void mod_mem_coro_exit(void);
+
+
 # ifdef __cplusplus
 }
 # endif

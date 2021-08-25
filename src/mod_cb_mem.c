@@ -26,6 +26,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <pthread.h>
 
 #include "mod_cb.h"
 #include "mod_mem.h"
@@ -89,7 +90,9 @@ mod_cb_add_on_commit(mod_cb_info_t *icb, void (*f)(void *arg), void *arg)
   if (unlikely(icb->commit_nb >= icb->commit_size)) {
     icb->commit_size *= 2;
     icb->commit = xrealloc(icb->commit, sizeof(mod_cb_entry_t) * icb->commit_size);
+    PRINT_DEBUG("==> mod_cb_add_on_commit_resize[%lu][icb:%p][%d]\n", pthread_self(), icb, icb->commit_nb);
   }
+  PRINT_DEBUG("==> mod_cb_add_on_commit: normal[%lu][icb:%p][%d]\n", pthread_self(), icb, icb->commit_nb);
   icb->commit[icb->commit_nb].f = f;
   icb->commit[icb->commit_nb].arg = arg;
   icb->commit_nb++;
@@ -139,7 +142,9 @@ int_stm_malloc(struct stm_tx *tx, size_t size)
 
   assert(mod_cb.key >= 0);
   icb = (mod_cb_info_t *)stm_get_specific(mod_cb.key);
+  PRINT_DEBUG("==> stm_malloc[%p][%p][mod_cb.key:%d]\n", tx, icb, mod_cb.key);
   assert(icb != NULL);
+  assert(icb != nil && "icb == nil");
 
   /* Round up size */
   if (sizeof(stm_word_t) == 4) {
@@ -149,7 +154,6 @@ int_stm_malloc(struct stm_tx *tx, size_t size)
   }
 
   addr = xmalloc(size);
-
   mod_cb_add_on_abort(icb, free, addr);
 
   return addr;
@@ -250,6 +254,7 @@ void int_stm_free2(struct stm_tx *tx, void *addr, size_t idx, size_t size)
     }
   }
   /* Schedule for removal */
+  PRINT_DEBUG("==> stm_free2[%p][icb:%p][addr:%p]\n", tx, icb, addr);
 #ifdef EPOCH_GC
   mod_cb_add_on_commit(icb, epoch_free, addr);
 #else /* ! EPOCH_GC */
@@ -359,14 +364,17 @@ static INLINE void
 mod_cb_mem_init(void)
 {
   /* Module is already initialized? */
-  if (mod_cb.key >= 0)
+  if (mod_cb.key >= 0) {
+    PRINT_DEBUG("==> mod_cb_mem_init: already initialized!!!!\n");
     return;
+  }
 
   if (!stm_register(mod_cb_on_thread_init, mod_cb_on_thread_exit, NULL, NULL, mod_cb_on_commit, mod_cb_on_abort, NULL)) {
     fprintf(stderr, "Cannot register callbacks\n");
     exit(1);
   }
   mod_cb.key = stm_create_specific();
+  PRINT_DEBUG("==> mod_cb_mem_init[%lu][key:%d]\n", pthread_self(), mod_cb.key);
   if (mod_cb.key < 0) {
     fprintf(stderr, "Cannot create specific key\n");
     exit(1);
@@ -389,3 +397,20 @@ void mod_mem_init(int use_gc)
 #endif /* EPOCH_GC */
 }
 
+/* CM_COROUTINE */
+void mod_mem_coro_init(void)
+{
+
+  PRINT_DEBUG("==> stm_mem_coro_init\n");
+
+  mod_cb_on_thread_init(NULL);
+
+  /* TODO: Multiple coroutine callbacks */
+
+}
+void mod_mem_coro_exit(void)
+{
+  PRINT_DEBUG("==> stm_mem_coro_exit\n");
+
+  mod_cb_on_thread_exit(NULL);
+}

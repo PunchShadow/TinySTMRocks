@@ -729,6 +729,10 @@ void stm_coroutine_register(void (*func)(), void* arg) _CALLCONV;
 void* stm_get_coro_arg(void) _CALLCONV;
 
 
+void* stm_probe(void) _CALLCONV;
+
+
+
 #ifdef __cplusplus
 }
 #endif

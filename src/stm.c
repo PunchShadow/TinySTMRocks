@@ -27,6 +27,7 @@
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdbool.h>
 
 #include <pthread.h>
 #include <sched.h>
@@ -118,9 +119,16 @@ global_t _tinystm =
 /* TODO this could be renamed with tinystm prefix */
 pthread_key_t thread_tx;
 pthread_key_t thread_gc;
+#if CM == CM_COROUTINE
+pthread_key_t thread_shadow_tx;
+#endif /* CM == CM_COROUTINE */
 #elif defined(TLS_COMPILER)
 __thread stm_tx_t* thread_tx = NULL;
 __thread long thread_gc = 0;
+#if CM == CM_COROUTINE
+__thread stm_tx_t* thread_shadow_tx = NULL;
+__thread bool is_co = false;
+#endif /* CM == CM_COROUTINE */
 #endif /* defined(TLS_COMPILER) */
 
 /* ################################################################### *
@@ -1206,7 +1214,12 @@ stm_get_coro_arg()
 
 #endif /* CM == CM_COROUTINE */
 
-
+_CALLCONV void*
+stm_probe()
+{
+  TX_GET;
+  return (void*)tx;
+}
 
 
 #ifdef WORK_STEALING

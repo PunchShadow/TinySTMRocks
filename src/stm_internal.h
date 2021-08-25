@@ -28,6 +28,7 @@
 
 #include <pthread.h>
 #include <string.h>
+#include <stdbool.h>
 #include <stm.h>
 #include "tls.h"
 #include "utils.h"
@@ -37,6 +38,8 @@
 #include "mod_dp.h" /* Work-stealing */
 #include "task_queue.h" 
 #include "aco.h" /* CM_COROUTINE */
+#include "mod_mem.h"
+#include "aco_assert_override.h" /* CM_COROUTINE */
 
 /* ################################################################### *
  * DEFINES
@@ -324,6 +327,7 @@ typedef struct cb_entry {               /* Callback entry */
   void *arg;                            /* Argument to be passed to function */
 } cb_entry_t;
 
+typedef struct stm_tx stm_tx_t; 
 typedef struct stm_tx {                 /* Transaction descriptor */
   JMP_BUF env;                          /* Environment for setjmp/longjmp */
   stm_tx_attr_t attr;                   /* Transaction attributes (user-specified) */
@@ -462,10 +466,16 @@ static INLINE void
 int_stm_task_queue_register(stm_tx_t *t);
 
 static INLINE void
+int_stm_non_main_coro_init(stm_tx_t *tx);
+
+static INLINE void
 int_stm_non_main_coro_exit(stm_tx_t *tx);
 
 static INLINE void
 int_stm_coro_CM(stm_tx_t *tx);
+
+static INLINE void
+int_stm_coro_init(stm_tx_t* tx);
 
 static INLINE void
 int_stm_main_coro_init(stm_tx_t *tx, int coro_max);
@@ -935,6 +945,7 @@ stm_drop(stm_tx_t *tx)
 static INLINE void
 int_stm_prepare(stm_tx_t *tx)
 {
+  PRINT_DEBUG("==> stm_prepare[%p]\n", tx);
 #if CM == CM_MODULAR
   if (tx->attr.visible_reads || (tx->visible_reads >= _tinystm.vr_threshold && _tinystm.vr_threshold >= 0)) {
     /* Use visible read */
@@ -956,6 +967,7 @@ int_stm_prepare(stm_tx_t *tx)
  start:
   /* Start timestamp */
   tx->start = tx->end = GET_CLOCK; /* OPT: Could be delayed until first read/write */
+  assert(tx->start != NULL && "tx->start is NULL");
   if (unlikely(tx->start >= VERSION_MAX)) {
     /* Block all transactions and reset clock */
     stm_quiesce_barrier(tx, rollover_clock, NULL);
@@ -1103,6 +1115,10 @@ stm_rollback(stm_tx_t *tx, unsigned int reason)
     tx->c_lock = NULL;
   }
 #endif /* CM == CM_DELAY || CM == CM_MODULAR */
+#if CM == CM_COROUTINE 
+  int_stm_coro_CM(tx);
+#endif /* CM == CM_COROUTINE */
+
 
   /* Don't prepare a new transaction if no retry. */
   if (tx->attr.no_retry || (reason & STM_ABORT_NO_RETRY) == STM_ABORT_NO_RETRY) {
@@ -1112,10 +1128,6 @@ stm_rollback(stm_tx_t *tx, unsigned int reason)
 
   /* Reset field to restart transaction */
   int_stm_prepare(tx);
-
-#if CM == CM_COROUTINE
-  int_stm_coro_CM(tx);
-#endif /* CM == CM_COROUTINE */
 
   /* Jump back to transaction start */
   /* Note: ABI usually requires 0x09 (runInstrumented+restoreLiveVariable) */
@@ -1244,13 +1256,24 @@ int_stm_init_thread(void)
 {
   stm_tx_t *tx;
 
-  PRINT_DEBUG("==> stm_init_thread()\n");
+  PRINT_DEBUG("==> stm_init_thread[%lu]\n", pthread_self());
 
+#if CM == CM_COROUTINE
   /* Avoid initializing more than once */
-  if ((tx = tls_get_tx()) != NULL) {
-    PRINT_DEBUG("==> stm_init_thread: more than once!!!!\n");
-    return tx;
+  int is_co = tls_get_co();
+  if (is_co == 1) {
+    tx = tls_get_tx();
+    PRINT_DEBUG("==> stm_init_thread_is_co[%p]\n", tx);
+  } else {
+    if ((tx = tls_get_tx()) != NULL) {
+      PRINT_DEBUG("==> stm_init_thread_not_co_but_exit[%p]\n", tx);
+      return tx;
+    }
+    PRINT_DEBUG("==> stm_init_thread_not_co_success[%p][%lu]\n", tx, pthread_self());
   }
+#else /* CM != CM_COROUTINE */    
+  if ((tx = tls_get_tx()) != NULL) return tx;
+#endif /* CM == CM_COROUTINE*/
 
 #ifdef EPOCH_GC
   gc_init_thread();
@@ -1258,6 +1281,12 @@ int_stm_init_thread(void)
 
   /* Allocate descriptor */
   tx = (stm_tx_t *)xmalloc_aligned(sizeof(stm_tx_t));
+  PRINT_DEBUG("==> stm_init_thread_xmalloc[%p][%lu]\n", tx, pthread_self());
+#if CM == CM_COROUTINE
+  int_stm_coro_init(tx); 
+  if (is_co == 1) int_stm_non_main_coro_init(tx);
+  else int_stm_main_coro_init(tx, 2);
+#endif /* CM == CM_COROUTINE */
   /* Set attribute */
   tx->attr = (stm_tx_attr_t)0;
   /* Set status (no need for CAS or atomic op) */
@@ -1298,17 +1327,8 @@ int_stm_init_thread(void)
   tx->timestamp = 0;
 #endif /* CM == CM_MODULAR */
 #ifdef WORK_STEALING
-# if CM == CM_COROUTINE
-  /* Only register task queue in main coroutine */
-  if (tx->main_co == NULL) int_stm_task_queue_register(tx);
-# else /* ! CM == CM_COROUTINE */
   int_stm_task_queue_register(tx);
-# endif /* CM == CM_COROUTINE */
 #endif /* WORK_STEALING */
-#if CM == CM_COROUTINE
-  /* Only initialize at main coroutine */
-  if (tx->main_co == NULL)  int_stm_main_coro_init(tx, 2); // Defaut coroutine number is 2.
-#endif /* CM == CM_COROUTINE */
 #if CM == CM_MODULAR || defined(TM_STATISTICS)
   tx->stat_retries = 0;
 #endif /* CM == CM_MODULAR || defined(TM_STATISTICS) */
@@ -1330,21 +1350,35 @@ int_stm_init_thread(void)
 #ifdef IRREVOCABLE_ENABLED
   tx->irrevocable = 0;
 #endif /* IRREVOCABLE_ENABLED */
+
   /* Store as thread-local data */
   tls_set_tx(tx);
+#if CM == CM_COROUTINE
+  if (is_co == 0) stm_quiesce_enter_thread(tx);
+  else mod_mem_init(0); // Init 
+#else /* CM != CM_COROUTINE */
+  stm_quiesce_enter_thread(tx);
+#endif /* CM == CM_CORUOTINE */
 
 #if CM == CM_COROUTINE
-  if (!tx->is_co)  stm_quiesce_enter_thread(tx);
-#else /* ! CM == CM_COROUTINE */
-  stm_quiesce_enter_thread(tx);
-#endif /* CM == CM_COROUTINE */
-
+  if (is_co == 0) {
+    PRINT_DEBUG("Main_co init callback\n");
+    if (likely(_tinystm.nb_init_cb != 0)) {
+      unsigned int cb;
+      for (cb = 0; cb < _tinystm.nb_init_cb; cb++)
+        _tinystm.init_cb[cb].f(_tinystm.init_cb[cb].arg);
+    }  
+  } else {
+    mod_mem_coro_init(); // Init icb in coroutine TX
+  }
+#else /* CM != CM_COROUTINE */
   /* Callbacks */
   if (likely(_tinystm.nb_init_cb != 0)) {
     unsigned int cb;
     for (cb = 0; cb < _tinystm.nb_init_cb; cb++)
       _tinystm.init_cb[cb].f(_tinystm.init_cb[cb].arg);
   }
+#endif /* CM == CM_COROUTINE */
 
   return tx;
 }
@@ -1368,11 +1402,6 @@ int_stm_exit_thread(stm_tx_t *tx)
       _tinystm.exit_cb[cb].f(_tinystm.exit_cb[cb].arg);
   }
 
-#if CM == CM_COROUTINE
-  if (tx->is_co) int_stm_non_main_coro_exit(tx);
-  else int_stm_coro_exit(tx);
-#endif /* CM == CM_COROUTINE */
-
 #ifdef TM_STATISTICS
   /* Display statistics before to lose it */
   if (getenv("TM_STATISTICS") != NULL) {
@@ -1383,7 +1412,18 @@ int_stm_exit_thread(stm_tx_t *tx)
   }
 #endif /* TM_STATISTICS */
 
+#if CM == CM_COROUTINE
+  if (tx->is_co == 1) {
+    //mod_mem_coro_exit();
+    int_stm_non_main_coro_exit(tx);
+  }else {
+    int_stm_coro_exit(tx);
+    stm_quiesce_exit_thread(tx);
+  }
+#else /* CM != CM_COROUTINE */
   stm_quiesce_exit_thread(tx);
+#endif /* CM == CM_COROUTINE */
+
 
 #ifdef EPOCH_GC
   t = GET_CLOCK;
@@ -1396,6 +1436,7 @@ int_stm_exit_thread(stm_tx_t *tx)
   xfree(tx->w_set.entries);
   xfree(tx);
 #endif /* ! EPOCH_GC */
+  PRINT_DEBUG("==> stm_exit_thread_set_tls_NULL[%lu]\n", pthread_self());
   tls_set_tx(NULL);
 }
 
@@ -1416,7 +1457,7 @@ int_stm_start(stm_tx_t *tx, stm_tx_attr_t attr)
 
   /* Initialize transaction descriptor */
   int_stm_prepare(tx);
-
+  PRINT_DEBUG("--> stm_start_prepare_finished[%p]\n", tx);
   /* Callbacks */
   if (likely(_tinystm.nb_start_cb != 0)) {
     unsigned int cb;
@@ -1692,6 +1733,7 @@ static INLINE void
 int_stm_set_specific(stm_tx_t *tx, int key, void *data)
 {
   assert (tx != NULL && key >= 0 && key < _tinystm.nb_specific);
+  PRINT_DEBUG("==> stm_set_specific[%lu][%p][key:%d]\n", pthread_self(), tx, key);
   ATOMIC_STORE(&tx->data[key], data);
 }
 
@@ -1774,9 +1816,28 @@ int_stm_task_queue_register(stm_tx_t *t)
 {
   pthread_t thread_id = pthread_self();
   long numThread = _tinystm.task_queue_nb;
-
+  PRINT_DEBUG("==>stm_task_queue_register_enter\n");
+  
+#if CM == CM_COROUTINE
+  int finded = 0;
+  if (t->is_co == 1) {
+    for (long i=0; i < numThread; i++) {
+      if(_tinystm.task_queue_info[i]->thread_id == thread_id) {
+        t->task_queue_position = i;
+        finded = 1;
+        PRINT_DEBUG("==>stm_coro_find_task_queue[%p](%lu, [%p])\n", t, thread_id, _tinystm.task_queue_info[i]->task_queue);
+        break;
+      }
+    }
+    if (finded == 1) {return;}
+    else {PRINT_DEBUG("CO CAN'T FIND IT'S TQ[%p]\n", t);}
+  }
+#endif /* CM == CM_COROUTINE */  
+  
+  
   /* */
   for (long i=0; i < numThread; i++) {
+    PRINT_DEBUG("%lu, %p\n", i, _tinystm.task_queue_info[i]->task_queue);
     if (_tinystm.task_queue_info[i]->task_queue == NULL) {
       _tinystm.task_queue_info[i]->task_queue = mod_dp_task_queue_init();
       _tinystm.task_queue_info[i]->thread_id = thread_id;
@@ -1789,8 +1850,8 @@ int_stm_task_queue_register(stm_tx_t *t)
       if (_tinystm.task_queue_info[i]->thread_id == thread_id) {
         t->task_queue_position = i;
         PRINT_DEBUG("==>stm_task_queue_Reregister(%lu, [%p])\n", thread_id, _tinystm.task_queue_info[i]->task_queue);
+        break;
       }
-      break;
     }
   }
 }
@@ -1820,7 +1881,7 @@ int_stm_task_queue_enqueue(stm_tx_t *t, ws_task* ws_task, int version)
     tmp->next = tq;
   }
   ws_task_queue_push(tq, ws_task, &num_task);
-  PRINT_DEBUG("==> stm_task_enqueue[(%lu.%d), %ld]\n", tp, version,  num_task);
+  PRINT_DEBUG("==> stm_task_enqueue[%p][(%lu.%d), %ld]\n",t, tp, version,  num_task);
 }
 
 static INLINE ws_task*
@@ -1871,12 +1932,12 @@ int_stm_task_queue_dequeue(stm_tx_t *t, int version)
     } while ((task_ptr == NULL) & (retry_time < _tinystm.task_queue_retry_time));
     /* For debug functions. */
     if (task_ptr == NULL) {
-      PRINT_DEBUG("==> stm_task_Pop_Fail[(%lu.%d), %ld]\n", tp, version, num_task);
+      PRINT_DEBUG("==> stm_task_Pop_Fail[%p][(%lu.%d), %ld]\n",t, tp, version, num_task);
     } else {
-      PRINT_DEBUG("==> stm_task_Pop_Success[(%lu.%d), %ld]\n", tp, version, num_task);
+      PRINT_DEBUG("==> stm_task_Pop_Success[%p][(%lu.%d), %ld]\n",t, tp, version, num_task);
     }
   } else {
-    PRINT_DEBUG("==> stm_task_Take[(%lu.%d), %ld]\n", tp, version, num_task);
+    PRINT_DEBUG("==> stm_task_Take[%p][(%lu.%d), %ld]\n",t, tp, version, num_task);
   }
   // task_ptr may be NULL since reaching max retry time
   t->cur_task_version = version;
@@ -1891,7 +1952,7 @@ int_stm_task_queue_dequeue(stm_tx_t *t, int version)
 static INLINE sigjmp_buf *
 int_stm_task_queue_start(stm_tx_t *tx)
 {
-  printf("===>stm_task_queue_start\n");
+  printf("===>stm_task_queue_start[%p]\n", tx);
   return &tx->task_queue_start;
   
   /*
@@ -1906,7 +1967,7 @@ int_stm_task_queue_start(stm_tx_t *tx)
 static INLINE sigjmp_buf *
 int_stm_task_queue_end(stm_tx_t *tx)
 {
-  printf("===>stm_task_queue_end\n");
+  printf("===>stm_task_queue_end[%p]\n", tx);
   return &tx->task_queue_end;
 }
 
@@ -1918,17 +1979,37 @@ int_stm_task_queue_end(stm_tx_t *tx)
 #if CM == CM_COROUTINE
 
 static INLINE void
+int_stm_coro_init(stm_tx_t* tx)
+{
+  PRINT_DEBUG("==>stm_coro_init[%p]\n", tx);
+  tx->main_co = NULL;
+  tx->sstk = NULL;
+  tx->co = NULL;
+  tx->coro_func = NULL;
+  tx->coro_arg = NULL;
+}
+
+static INLINE void
+int_stm_non_main_coro_init(stm_tx_t* tx)
+{
+  PRINT_DEBUG("==>stm_non-main_coro_init[%p]\n", tx);
+  tx->coro_arg = aco_get_arg();
+  tx->is_co = 1;
+  tx->co_nb = -1; // -1: in non-main coroutine
+}
+
+
+static INLINE void
 int_stm_main_coro_init(stm_tx_t *tx, int coro_max)
 {
+  PRINT_DEBUG("==>stm_main_coro_init[%p]\n", tx);
   aco_thread_init(NULL);
   tx->main_co = aco_create(NULL, NULL, 0, NULL, NULL);
   tx->sstk = aco_share_stack_new(0);
   assert(tx->co_max != NULL);
-  tx->co = malloc(sizeof(aco_t*) * tx->co_max);
+  tx->co = malloc(sizeof(aco_t*) * coro_max);
   tx->co_nb = 0;
   tx->co_max = coro_max;
-  tx->coro_func = NULL;
-  tx->coro_arg = NULL;
   tx->is_co = 0;
 }
 
@@ -1940,11 +2021,23 @@ int_stm_main_coro_init(stm_tx_t *tx, int coro_max)
 static INLINE aco_t*
 int_stm_non_main_coro_create(stm_tx_t *tx, void (*coro_func)(), void* coro_arg)
 {
-  aco_t* tmp = tx->co[0];
-  while(tmp != NULL) tmp++;
-  tmp = aco_create(tx->main_co, tx->sstk, 0, coro_func, coro_arg);
-  tx->co_nb++;
-  return tmp;
+  int done = 0;
+  aco_t* result;
+  for(int i=0; i < tx->co_max; i++) {
+    if (tx->co[i] == NULL) { 
+      tx->co[i] = aco_create(tx->main_co, tx->sstk, 0, coro_func, coro_arg);
+      tx->co_nb++;
+      done = 1;
+      result = tx->co[i];
+      break;
+    }
+  }
+  if (done == 0) {
+    PRINT_DEBUG("==> stm_coro_create_fail[%p]\n", tx);
+    return NULL;
+  }
+  PRINT_DEBUG("==>stm_non-main_coro_create[%p][%p]\n",tx, result);
+  return result;
 }
 
 
@@ -1952,7 +2045,13 @@ int_stm_non_main_coro_create(stm_tx_t *tx, void (*coro_func)(), void* coro_arg)
 static INLINE void
 int_stm_non_main_coro_exit(stm_tx_t *tx)
 {
-  aco_exit();
+  PRINT_DEBUG("==>stm_non_main_coro_exit[%p]\n", tx);
+  if (tls_get_co() == 1) {
+    PRINT_DEBUG("==> stm_non_main_coro_finished[%lu][%p]\n", pthread_self(), tx);
+    aco_exit();
+  } else {
+    PRINT_DEBUG("==> stm_main_coro_error_called[%lu][%p]\n", pthread_self(), tx);
+  } 
 }
 
 
@@ -1960,13 +2059,29 @@ int_stm_non_main_coro_exit(stm_tx_t *tx)
 static INLINE void
 int_stm_coro_exit(stm_tx_t *tx)
 {
-  if (tx->coro_func == NULL) return;
   /* Destory all non-main coroutines */
-  for(int i = 0; (i < tx->co_max) || tx->co[i] != NULL; i++) {
-    aco_destroy(tx->co[i]);
-    tx->co[i] = NULL;
+  /* TODO: Check whether coroutine is pending */
+
+  PRINT_DEBUG("==>stm_coro_exit[%p]\n", tx);
+  
+  for(int i = 0; (i < tx->co_nb); i++) {
+    if (tx->co[i] != NULL) {
+      if (tx->co[i]->is_end) {
+        aco_destroy(tx->co[i]);
+        tx->co[i] = NULL;
+        PRINT_DEBUG("==> stm_coro_destory[tx->co[%d]]\n", i);
+      } else {
+        // Coroutine is not finished. switch to coroutine.
+        PRINT_DEBUG("==> stm_non_main_coro_not_finished[%p][co:%p]\n", tx, tx->co[i]);
+        aco_resume(tx->co[i]);
+        tls_switch_tx(); // When returning, switch back to 
+      }
+    }
   }
-  free(tx->co);
+  /*
+  aco_destroy(tx->co[0]);
+  tx->co[0] = NULL;
+  */
 
   aco_share_stack_destroy(tx->sstk);
   tx->sstk = NULL;
@@ -1976,6 +2091,7 @@ int_stm_coro_exit(stm_tx_t *tx)
 
   tx->coro_func = NULL;
   tx->coro_arg = NULL;
+  PRINT_DEBUG("==> stm_coro_exit_exit[%p]\n",tx);
 }
 
 
@@ -1983,20 +2099,22 @@ int_stm_coro_exit(stm_tx_t *tx)
 static INLINE void
 int_stm_coro_resume(stm_tx_t* tx, aco_t *co)
 {
-  PRINT_DEBUG("==> Main resume [%p]\n", co);
-  assert(tx->is_co == 0 && "Resume should be called by main coro\n");
-  tx->is_co = 1;
+  tls_switch_sh_tx(); // Switch to co thread tls
+  tx = tls_get_tx(); 
+  PRINT_DEBUG("==> Main resume[%lu][%p][%p]\n",pthread_self(), tx, co);
+  //assert(tx->is_co == 0 && "Resume should be called by main coro\n");
   aco_resume(co);
 }
 
 
 static INLINE void
 int_stm_coro_yield(stm_tx_t* tx)
-{
+{ 
+  tls_switch_tx(); // Switch to main thread
+  tx = tls_get_tx(); // Reget tx descriptor
   aco_t* co = aco_get_co();
-  assert(tx->is_co == 1  && "Yield should be called by non-main coros\n");
-  PRINT_DEBUG("==> Coro yield from [%p]\n", co);
-  tx->is_co = 0; 
+  //assert(tx->is_co == 1  && "Yield should be called by non-main coros\n");
+  PRINT_DEBUG("==> Coro yield from[%lu][%p][%p]\n",pthread_self(), tx, co);
   aco_yield(); 
 }
 
@@ -2005,7 +2123,7 @@ int_stm_coro_non_main_coro_exit()
 {
   aco_t* co = aco_get_co();
   assert(co != NULL && "Yield should be called by non-main coros\n");
-  PRINT_DEBUG("==> Coro exit [%p]\n", co);
+  PRINT_DEBUG("==> Coro exit[%p]\n", co);
   aco_exit();
 }
 
@@ -2014,7 +2132,11 @@ static INLINE void
 int_stm_coro_func_register(stm_tx_t *tx, void (*coro_func)(), void* coro_arg)
 {
   // If in coroutine code -> not to register again.
-  if (tx->is_co == 1) return;
+  if (tx->is_co == 1) {
+    PRINT_DEBUG("Co: Not need to register coro function[%p]!!!\n", tx);
+    return;
+  }
+  PRINT_DEBUG("==>stm_coro_func_register[%p]\n", tx);
   tx->coro_func = coro_func;
   tx->coro_arg = coro_arg;
 }
@@ -2025,13 +2147,16 @@ static INLINE void
 int_stm_coro_CM(stm_tx_t *tx)
 { 
   aco_t* switch_co = NULL;
-  
+  PRINT_DEBUG("==> stm_coro_CM[%lu][%p]\n",pthread_self(), tx);  
   /* If the caller is main coroutine */
   if (tx->is_co == 0) {
       /* Choose a coroutine to execute */
     for(int i=0; i < tx->co_nb; i++) {
       if (tx->co[i] == NULL) continue;
-      if (!(tx->co[i]->is_end)) switch_co = tx->co[i];
+      if (!(tx->co[i]->is_end)) {
+        PRINT_DEBUG("Find switch co[%lu][%p][co:%p]\n", pthread_self(), tx, switch_co);
+        switch_co = tx->co[i];
+      }
     }
 
     /* No pending non-main coroutine. 
@@ -2039,16 +2164,19 @@ int_stm_coro_CM(stm_tx_t *tx)
     */
     if (switch_co == NULL) {
       // TODO: need to find a good way to import coroutine function pointer.
-      switch_co = aco_create(tx->main_co, tx->sstk, 0, tx->coro_func, tx->coro_arg);
-      tx->co[0] = switch_co; 
+      tx->co[0] = aco_create(tx->main_co, tx->sstk, 0, tx->coro_func, tx->coro_arg);
+      PRINT_DEBUG("==> stm_create_co[%lu][%p][co:%p]\n", pthread_self(), tx, tx->co[0]); 
+      switch_co = tx->co[0];
     }
 
     /* Resume non-main coroutine and return*/
     int_stm_coro_resume(tx, switch_co);
+    tls_switch_tx(); // When returning from co, switch back to the main-thread TLS.
 
   } else {
     /* Caller is non-main coroutine */
     int_stm_coro_yield(tx);
+    tls_switch_sh_tx(); // When returing from main.
   }
   
 }
@@ -2056,7 +2184,8 @@ int_stm_coro_CM(stm_tx_t *tx)
 static INLINE int
 int_is_Main_coro(stm_tx_t* tx)
 {
-  return tx->is_co;
+  // XOR to bit change
+  return (tx->is_co ^ 1);
 }
 
 static INLINE void*

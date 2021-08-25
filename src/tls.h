@@ -53,11 +53,19 @@
 #ifndef _TLS_H_
 #define _TLS_H_
 
-#if !defined(TLS_COMPILER) && !defined(TLS_POSIX) && !defined(TLS_DARWIN) && !defined(TLS_GLIBC)
-# error "TLS is not defined correctly (TLS_COMPILER, TLS_POSIX, TLS_DARWIN, TLS_GLIBC)"
+#if !defined(TLS_COMPILER) && !defined(TLS_POSIX) && !defined(TLS_DARWIN) && !defined(TLS_GLIBC) && !defined(CM)
+# error "TLS is not defined correctly (TLS_COMPILER, TLS_POSIX, TLS_DARWIN, TLS_GLIBC, CM)"
 #endif /* !defined(TLS_COMPILER) && !defined(TLS_POSIX) && !defined(TLS_DARWIN) && !defined(TLS_GLIBC) */
 
+/* Contention mangers */
+#define CM_SUICIDE                      0
+#define CM_DELAY                        1
+#define CM_BACKOFF                      2
+#define CM_MODULAR                      3
+#define CM_COROUTINE                    4
+
 #include "utils.h"
+#include <stdbool.h>
 
 struct stm_tx;
 
@@ -72,15 +80,6 @@ struct stm_tx;
 #  define SEG_WRITE(OFS)   "movl\t%0,%%gs:(" #OFS "*4)"
 # endif
 
-static INLINE void
-tls_init(void)
-{
-}
-
-static INLINE void
-tls_exit(void)
-{
-}
 
 static INLINE struct stm_tx *
 tls_get_tx(void)
@@ -110,8 +109,87 @@ tls_set_gc(long gc)
   asm volatile (SEG_WRITE(11) : : "r"(gc));
 }
 
-
 #elif defined(TLS_COMPILER)
+#if CM == CM_COROUTINE
+extern __thread struct stm_tx * thread_tx;
+extern __thread long thread_gc;
+
+extern __thread struct stm_tx * thread_shadow_tx;
+extern __thread bool is_co;
+
+static INLINE void
+tls_init(void)
+{
+  thread_tx = NULL;
+  thread_gc = 0;
+  thread_shadow_tx = NULL;
+}
+
+static INLINE void
+tls_exit(void)
+{
+  thread_tx = NULL;
+  thread_gc = 0;
+  thread_shadow_tx = NULL;
+}
+
+static INLINE struct stm_tx *
+tls_get_tx(void)
+{
+  if(is_co) {
+    //PRINT_DEBUG("==> tls_get_tx shadow[%p]\n", thread_shadow_tx);;
+    return thread_shadow_tx;
+  } else {
+    //PRINT_DEBUG("==> tls_get_tx normal[%p]\n", thread_tx);
+    return thread_tx;
+  }
+}
+
+static INLINE long
+tls_get_gc(void)
+{
+  return thread_gc;
+}
+
+static INLINE void
+tls_set_tx(struct stm_tx *tx)
+{
+  /* is_co -> set thread_shadow_tx, else set thread_tx */
+  if(is_co) {
+    PRINT_DEBUG("[%lu][%p]: is_co, set thread_shadow_tx = tx\n",pthread_self(), tx);
+    thread_shadow_tx = tx;
+    return;
+  }
+  else {
+    PRINT_DEBUG("[%lu][%p]: is_main, set thread_tx = tx\n",pthread_self(), tx);
+    thread_tx = tx;
+    return;
+  }
+}
+
+static INLINE bool
+tls_get_co(void)
+{
+  return is_co;
+}
+static INLINE void
+tls_switch_sh_tx(void)
+{  
+  is_co = true;
+}
+static INLINE void
+tls_switch_tx(void)
+{
+  is_co = false;
+}
+
+static INLINE void
+tls_set_gc(long gc)
+{
+  thread_gc = gc;
+}
+
+#elif CM != CM_COROUTINE /* CM != CM_COROUTINE */
 extern __thread struct stm_tx * thread_tx;
 extern __thread long thread_gc;
 
@@ -152,6 +230,7 @@ tls_set_gc(long gc)
 {
   thread_gc = gc;
 }
+#endif /* CM == CM_COROUTINE */
 
 
 #elif defined(TLS_POSIX) || defined(TLS_DARWIN)
