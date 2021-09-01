@@ -29,6 +29,7 @@ typedef struct ws_task {
 } ws_task;
 
 
+
 typedef struct ws_task_circular_array {
     struct ws_task** _array;
     unsigned long _size;
@@ -43,6 +44,9 @@ typedef struct ws_task_queue {
     int taskNum;
     ws_task_queue* next;
 } ws_task_queue;
+
+
+
 
 static inline ws_task*
 ws_task_create(long start, long stop)
@@ -73,8 +77,10 @@ ws_task_circular_array_new(unsigned long size)
     assert(ws_array);
 
     ws_array->_array = malloc(sizeof(ws_task*) * size);
+    for (long i = 0; i < size; i++) {
+        ws_array->_array[i] = NULL;
+    }
     assert(ws_array->_array);
-
     ws_array->_size = size;
     return ws_array;
 }
@@ -82,6 +88,9 @@ ws_task_circular_array_new(unsigned long size)
 static inline void
 ws_task_circular_array_delete(ws_task_circular_array* ws_array)
 {
+    for (long i=0; i < ws_array->_size; i++) {
+        free(ws_array->_array[(int)i]);
+    }
     free(ws_array->_array);
     free(ws_array);
 }
@@ -96,6 +105,8 @@ ws_task_circular_array_get(ws_task_circular_array* ws_array, unsigned long index
 static inline void
 ws_task_circular_array_set(ws_task_circular_array* ws_array, unsigned long index, ws_task* task)
 {
+    //ws_task* pos = ws_array->_array[ index % ws_array->_size ];
+    //if(pos != NULL) free(pos); 
     ws_array->_array[ index % ws_array->_size ] = task;
 }
 

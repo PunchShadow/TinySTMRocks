@@ -477,7 +477,7 @@
 #      define TM_TaskPop(ver)           stm_TaskPop(ver)
 
 #      define TM_Coroutine(func, arg)   stm_coroutine_register(func, arg); \
-                                        if(!stm_isMain_coro()) arg = stm_get_coro_arg() 
+                                        if(stm_isMain_coro() == 0) arg = stm_get_coro_arg() 
 
 #      define TM_PROBE()                stm_probe()
 
