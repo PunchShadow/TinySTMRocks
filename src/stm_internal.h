@@ -1355,7 +1355,6 @@ int_stm_init_thread(void)
   tls_set_tx(tx);
 #if CM == CM_COROUTINE
   if (is_co == 0) stm_quiesce_enter_thread(tx);
-  else mod_mem_init(0); // Init 
 #else /* CM != CM_COROUTINE */
   stm_quiesce_enter_thread(tx);
 #endif /* CM == CM_CORUOTINE */
@@ -1413,7 +1412,7 @@ int_stm_exit_thread(stm_tx_t *tx)
 #endif /* TM_STATISTICS */
 
 #if CM == CM_COROUTINE
-  int is_co = tx->is_co;
+  int is_co = tls_get_co();
   if (is_co == 0) {
     int_stm_coro_exit(tx);
     stm_quiesce_exit_thread(tx);
@@ -1799,6 +1798,7 @@ int_stm_task_queue_exit()
   ws_task_queue* cur;
   for (long i=0; i < numThread; i++) {
     cur = _tinystm.task_queue_info[i]->task_queue;
+    if (cur == NULL) continue;
     // Free the multiple queues in one thread.
     do {
       tmp = cur->next;
@@ -1920,7 +1920,11 @@ int_stm_task_queue_dequeue(stm_tx_t *t, int version)
   if (task_ptr == NULL) {
     do {
       // Select victim thread & take task from the thread
-      victim_nb = int_stm_task_queue_victim_select(t);
+      /* Keep randomizing until the victim task_queue is registered. */
+      do {
+        victim_nb = int_stm_task_queue_victim_select(t);
+      } while (_tinystm.task_queue_info[victim_nb]->task_queue == NULL);
+      /* Check if the victim task queue is empty */
       if (ws_task_isEmpty(_tinystm.task_queue_info[victim_nb]->task_queue)) {
         retry_time ++;
         //printf("retry_time: %d, victim: %ld\n", retry_time, victim_nb);
@@ -2118,9 +2122,8 @@ int_stm_coro_yield(stm_tx_t* tx)
 { 
   tls_switch_tx(); // Switch to main thread
   tx = tls_get_tx(); // Reget tx descriptor
-  aco_t* co = aco_get_co();
   //assert(tx->is_co == 1  && "Yield should be called by non-main coros\n");
-  PRINT_DEBUG("==> Coro yield from[%lu][%p][%p]\n",pthread_self(), tx, co);
+  PRINT_DEBUG("==> Coro yield from[%lu][%p][%p]\n",pthread_self(), tx, aco_get_co());
   aco_yield(); 
 }
 
@@ -2167,7 +2170,7 @@ int_stm_coro_CM(stm_tx_t *tx)
     if (switch_co == NULL) {
       // TODO: need to find a good way to import coroutine function pointer.
       switch_co = int_stm_non_main_coro_create(tx, tx->coro_func, tx->coro_arg);
-      if (switch_co == NULL) break; /* Coroutine is full*/
+      if (switch_co == NULL) return; /* Coroutine is full*/
       PRINT_DEBUG("==> stm_create_co[%lu][%p][co:%p]\n", pthread_self(), tx, tx->co[0]); 
     }
 
