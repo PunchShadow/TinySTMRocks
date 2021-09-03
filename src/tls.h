@@ -116,6 +116,22 @@ extern __thread long thread_gc;
 
 extern __thread struct stm_tx * thread_shadow_tx;
 extern __thread int is_co;
+extern __thread unsigned int nb_commit;
+extern __thread unsigned int nb_abort;
+
+static INLINE void
+tls_set_stat(int type, unsigned int nb)
+{
+  if (type == 0) nb_commit += nb;
+  else nb_abort += nb;
+}
+
+static INLINE void
+tls_get_stat(void* nb_commits, void* nb_aborts)
+{
+  *(unsigned int *)nb_commits = nb_commit;
+  *(unsigned int *)nb_aborts = nb_abort;
+}
 
 static INLINE void
 tls_init(void)
@@ -156,12 +172,12 @@ tls_set_tx(struct stm_tx *tx)
 {
   /* is_co -> set thread_shadow_tx, else set thread_tx */
   if(is_co) {
-    PRINT_DEBUG("[%lu][%p]: is_co, set thread_shadow_tx = tx\n",pthread_self(), tx);
+    //PRINT_DEBUG("[%lu][%p]: is_co, set thread_shadow_tx = tx\n",pthread_self(), tx);
     thread_shadow_tx = tx;
     return;
   }
   else {
-    PRINT_DEBUG("[%lu][%p]: is_main, set thread_tx = tx\n",pthread_self(), tx);
+    //PRINT_DEBUG("[%lu][%p]: is_main, set thread_tx = tx\n",pthread_self(), tx);
     thread_tx = tx;
     return;
   }

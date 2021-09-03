@@ -127,6 +127,8 @@ __thread long thread_gc = 0;
 #if CM == CM_COROUTINE
 __thread stm_tx_t* thread_shadow_tx = NULL;
 __thread int is_co = 0;
+__thread unsigned int nb_commit = 0;
+__thread unsigned int nb_abort = 0;
 #endif /* CM == CM_COROUTINE */
 #endif /* defined(TLS_COMPILER) */
 
@@ -316,6 +318,12 @@ stm_exit(void)
   if (!_tinystm.initialized)
     return;
 
+#if CM == CM_COROUTINE
+#ifdef TM_STATISTICS
+  int_stm_print_stat();
+#endif /* TM_STATISTICS */
+#endif /* CM == CM_COROUTINE */
+ 
   tls_exit();
   stm_quiesce_exit();
 #ifdef HELPER_THREAD
@@ -324,7 +332,7 @@ stm_exit(void)
 #ifdef EPOCH_GC
   gc_exit();
 #endif /* EPOCH_GC */
-
+ 
   _tinystm.initialized = 0;
 }
 

@@ -437,7 +437,13 @@ typedef struct {
   unsigned long task_queue_nb;
   int task_queue_retry_time;
 #ifdef WORK_STEALING
+  pthread_mutex_t taskqueue_mutex;      /* Mutex to support register task queue */
 #endif /* WORK_STEALING */
+#if defined(TM_STATISTICS) && CM == CM_COROUTINE
+  unsigned int to_nb_commits;
+  unsigned int to_nb_aborts;
+#endif /* TM_STATISTICS && CM == CM_COROUTINE */
+
   /* At least twice a cache line (256 bytes to be on the safe side) */
   char padding[CACHELINE_SIZE];
 
@@ -486,6 +492,14 @@ int_stm_coro_exit(stm_tx_t *tx);
 
 static INLINE void
 int_stm_coro_resume(stm_tx_t* tx, aco_t *co);
+
+
+static INLINE void
+int_stm_stat_addTLS(stm_tx_t* tx);
+
+static INLINE void
+int_stm_print_stat(void);
+
 /* ################################################################### *
  * INLINE FUNCTIONS
  * ################################################################### */
@@ -521,6 +535,10 @@ stm_quiesce_init(void)
   _tinystm.quiesce = 0;
   _tinystm.threads_nb = 0;
   _tinystm.threads = NULL;
+#if defined(TM_STATISTICS) && CM == CM_COROUTINE
+  _tinystm.to_nb_commits = 0;
+  _tinystm.to_nb_aborts = 0;
+#endif /* TM_STATISTICS && CM == CM_COROUTINE */ 
 }
 
 /*
@@ -565,6 +583,15 @@ stm_quiesce_exit_thread(stm_tx_t *tx)
   assert(!IS_ACTIVE(tx->status));
 
   pthread_mutex_lock(&_tinystm.quiesce_mutex);
+#if defined(TM_STATISTICS) && CM == CM_COROUTINE
+  unsigned int nb_commits = 0;
+  unsigned int nb_aborts = 0;
+  tls_get_stat(&nb_commits, &nb_aborts);
+  PRINT_DEBUG("==> stm_record: [tx:%p][nb_commits:%d][nb_aborts:%d]\n",tx, nb_commits, nb_aborts);
+  _tinystm.to_nb_commits += nb_commits;
+  _tinystm.to_nb_aborts += nb_aborts;
+#endif /* TM_STATISTICS && CM == CM_COROUTINE */
+  
   /* Remove descriptor from list */
   p = NULL;
   t = _tinystm.threads;
@@ -1361,7 +1388,6 @@ int_stm_init_thread(void)
 
 #if CM == CM_COROUTINE
   if (is_co == 0) {
-    PRINT_DEBUG("Main_co init callback\n");
     if (likely(_tinystm.nb_init_cb != 0)) {
       unsigned int cb;
       for (cb = 0; cb < _tinystm.nb_init_cb; cb++)
@@ -1409,6 +1435,9 @@ int_stm_exit_thread(stm_tx_t *tx)
       avg_aborts = (double)tx->stat_aborts / tx->stat_commits;
     printf("Thread %p | commits:%12u avg_aborts:%12.2f max_retries:%12u\n", (void *)pthread_self(), tx->stat_commits, avg_aborts, tx->stat_retries_max);
   }
+#if CM == CM_COROUTINE
+  int_stm_stat_addTLS(tx);
+#endif /*CM == CM_COROUTINE */
 #endif /* TM_STATISTICS */
 
 #if CM == CM_COROUTINE
@@ -1815,13 +1844,13 @@ int_stm_task_queue_exit()
  */
 
 static INLINE void
-int_stm_task_queue_register(stm_tx_t *t)
+int_stm_task_queue_register(stm_tx_t *tx)
 {
   pthread_t thread_id = pthread_self();
   long numThread = _tinystm.task_queue_nb;
-  PRINT_DEBUG("==>stm_task_queue_register_enter\n");
   
 #if CM == CM_COROUTINE
+  /*
   int finded = 0;
   if (t->is_co == 1) {
     for (long i=0; i < numThread; i++) {
@@ -1835,10 +1864,50 @@ int_stm_task_queue_register(stm_tx_t *t)
     if (finded == 1) {return;}
     else {PRINT_DEBUG("CO CAN'T FIND IT'S TQ[%p]\n", t);}
   }
+  */
 #endif /* CM == CM_COROUTINE */  
+
+  /* Check whether the thread has already registers */
+  tx->task_queue_position = -1;
+  for (long i=0; i < numThread; i++) {
+    if (_tinystm.task_queue_info[i]->task_queue != NULL) {
+      if (_tinystm.task_queue_info[i]->thread_id == thread_id) {
+        /* Thread matches */
+        tx->task_queue_position = i;
+        PRINT_DEBUG("==> stm_task_queue_match[tx:%p][id:%lu]\n", tx, thread_id);
+        return;
+      }
+    }
+  }
+#if CM == CM_COROUTINE
+  if (tx->is_co == 1 && tx->task_queue_position < 0) {
+    PRINT_DEBUG("==> [tx:%p][id:%lu]NON-MAIN CO CANNOT FIND CORRESPONDING REGISTER!!!!\n", tx, thread_id);
+    return;
+  } 
+#endif /* CM == CM_COROUTINE */
+  /* Can't find the position */
+  if (tx->task_queue_position < 0 ) {
+    pthread_mutex_lock(&_tinystm.taskqueue_mutex);
+    for (long i = 0; i < numThread; i++) {
+      /* Find empty task queue position */
+      if (_tinystm.task_queue_info[i]->task_queue == NULL) {
+        _tinystm.task_queue_info[i]->task_queue = mod_dp_task_queue_init();
+        _tinystm.task_queue_info[i]->thread_id = thread_id;
+        tx->task_queue_position = i;
+        tx->cur_task_version = 0;
+        break;
+      }
+    }
+    pthread_mutex_unlock(&_tinystm.taskqueue_mutex);
+  }
+  if (tx->task_queue_position < 0) {
+    PRINT_DEBUG("[tx:%p][id:%lu]Cannot register\n", tx, thread_id);
+  }
+  PRINT_DEBUG("==> stm_task_queue_create[tx:%p][position%lu]\n", tx, tx->task_queue_position);
   
   
-  /* */
+  /* FIXED: race condition of task queue init */
+  /*
   for (long i=0; i < numThread; i++) {
     PRINT_DEBUG("%lu, %p\n", i, _tinystm.task_queue_info[i]->task_queue);
     if (_tinystm.task_queue_info[i]->task_queue == NULL) {
@@ -1857,6 +1926,7 @@ int_stm_task_queue_register(stm_tx_t *t)
       }
     }
   }
+  */
 }
 
 static INLINE void
@@ -2149,7 +2219,7 @@ static INLINE void
 int_stm_coro_CM(stm_tx_t *tx)
 { 
   aco_t* switch_co = NULL;
-  PRINT_DEBUG("==> stm_coro_CM[%lu][%p]\n",pthread_self(), tx);  
+  //PRINT_DEBUG("==> stm_coro_CM[%lu][%p]\n",pthread_self(), tx);  
   /* If the caller is main coroutine */
   if (tx->is_co == 0) {
     if (tx->coro_func == NULL) {
@@ -2160,7 +2230,7 @@ int_stm_coro_CM(stm_tx_t *tx)
     for(int i=0; i < tx->co_max; i++) {
       if (tx->co[i] == NULL) continue;
       if (!(tx->co[i]->is_end)) {
-        PRINT_DEBUG("Find switch co[%lu][%p][co:%p]\n", pthread_self(), tx, switch_co);
+        PRINT_DEBUG("==> stm_CM: Find switch co[%lu][%p][co:%p]\n", pthread_self(), tx, switch_co);
         switch_co = tx->co[i];
       }
     }
@@ -2172,16 +2242,16 @@ int_stm_coro_CM(stm_tx_t *tx)
       // TODO: need to find a good way to import coroutine function pointer.
       switch_co = int_stm_non_main_coro_create(tx, tx->coro_func, tx->coro_arg);
       if (switch_co == NULL) return; /* Coroutine is full*/
-      PRINT_DEBUG("==> stm_create_co[%lu][%p][co:%p]\n", pthread_self(), tx, tx->co[0]); 
+      PRINT_DEBUG("==> stm_CM: create_co[%lu][%p][co:%p]\n", pthread_self(), tx, tx->co[0]); 
     }
-
+    PRINT_DEBUG("==> stm_CM: resume_to[tx:%p][co:%p]\n", tx, switch_co);
     /* Resume non-main coroutine and return*/
     int_stm_coro_resume(tx, switch_co);
     tls_switch_tx(); // When returning from co, switch back to the main-thread TLS.
 
   } else {
     /* Caller is non-main coroutine */
-    PRINT_DEBUG("==> stm_yield_to\n");
+    PRINT_DEBUG("==> stm_CM: yield_to\n");
     int_stm_coro_yield(tx);
     tls_switch_sh_tx(); // When returing from main.
   }
@@ -2199,6 +2269,48 @@ static INLINE void*
 int_stm_get_coro_arg(stm_tx_t* tx)
 {
   return tx->coro_arg;
+}
+
+
+/* Record cumulative stats to TLS 
+*  type: 0 nb_commit
+*        1 nb_abort
+*/
+static INLINE void
+int_stm_stat_addTLS(stm_tx_t* tx)
+{
+  unsigned int commit = 0;
+  unsigned int abort = 0;
+  int_stm_get_stats(tx, "nb_commits", &commit);
+  tls_set_stat(0, commit);
+  int_stm_get_stats(tx, "nb_aborts", &abort);
+  tls_set_stat(1, abort);
+  PRINT_DEBUG("==> stm_stat_addTLS[tx:%p][commit:%d][abort:%d]\n", tx, commit, abort);
+}
+
+static INLINE void
+int_stm_print_stat(void)
+{
+  stm_tx_t* t;
+  unsigned int commit_nb, abort_nb;
+  unsigned int cum_com_nb = 0, cum_ab_nb = 0;
+  int i = 0;
+  printf("********************************************\n");
+  printf("*              STATISTICS                  *\n");
+  printf("********************************************\n");
+
+  for (t = _tinystm.threads; t != NULL; t = t->next, i++) {
+    tls_get_stat(&commit_nb, &abort_nb);
+    printf("- Thread: %d\n", i);
+    printf("           nb_commits: %d\n", commit_nb);
+    printf("           nb_aborts:  %d\n", abort_nb);
+    printf("\n");
+    cum_com_nb += commit_nb;
+    cum_ab_nb += abort_nb;    
+  }
+  printf("- Summary:\n");
+  printf("          total_nb_commits: %d\n", _tinystm.to_nb_commits);
+  printf("          total_nb_aborts:  %d\n", _tinystm.to_nb_aborts);
 }
 
 
