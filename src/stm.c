@@ -27,7 +27,6 @@
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
-#include <stdbool.h>
 
 #include <pthread.h>
 #include <sched.h>
@@ -127,7 +126,7 @@ __thread stm_tx_t* thread_tx = NULL;
 __thread long thread_gc = 0;
 #if CM == CM_COROUTINE
 __thread stm_tx_t* thread_shadow_tx = NULL;
-__thread bool is_co = false;
+__thread int is_co = 0;
 #endif /* CM == CM_COROUTINE */
 #endif /* defined(TLS_COMPILER) */
 

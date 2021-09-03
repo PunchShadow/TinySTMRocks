@@ -591,7 +591,7 @@ stm_quiesce_exit_thread(stm_tx_t *tx)
 static NOINLINE void
 stm_quiesce_barrier(stm_tx_t *tx, void (*f)(void *), void *arg)
 {
-  PRINT_DEBUG("==> stm_quiesce_barrier()\n");
+  PRINT_DEBUG("==> stm_quiesce_barrier()[%p]\n", tx);
 
   /* Can only be called if non-active */
   assert(tx == NULL || !IS_ACTIVE(tx->status));
@@ -1926,6 +1926,7 @@ int_stm_task_queue_dequeue(stm_tx_t *t, int version)
       } while (_tinystm.task_queue_info[victim_nb]->task_queue == NULL);
       /* Check if the victim task queue is empty */
       if (ws_task_isEmpty(_tinystm.task_queue_info[victim_nb]->task_queue)) {
+        // TODO: Keep thread alive & stealing works to do.
         retry_time ++;
         //printf("retry_time: %d, victim: %ld\n", retry_time, victim_nb);
         continue;
@@ -2155,7 +2156,7 @@ int_stm_coro_CM(stm_tx_t *tx)
       PRINT_DEBUG("==> stm_coro_CM_coro_func==NULL\n");
       return; /* If there's no register coro_func. */
     }
-      /* Choose a coroutine to execute */
+    /* Choose a coroutine to execute */
     for(int i=0; i < tx->co_max; i++) {
       if (tx->co[i] == NULL) continue;
       if (!(tx->co[i]->is_end)) {
@@ -2180,6 +2181,7 @@ int_stm_coro_CM(stm_tx_t *tx)
 
   } else {
     /* Caller is non-main coroutine */
+    PRINT_DEBUG("==> stm_yield_to\n");
     int_stm_coro_yield(tx);
     tls_switch_sh_tx(); // When returing from main.
   }

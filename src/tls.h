@@ -115,7 +115,7 @@ extern __thread struct stm_tx * thread_tx;
 extern __thread long thread_gc;
 
 extern __thread struct stm_tx * thread_shadow_tx;
-extern __thread bool is_co;
+extern __thread int is_co;
 
 static INLINE void
 tls_init(void)
@@ -167,7 +167,7 @@ tls_set_tx(struct stm_tx *tx)
   }
 }
 
-static INLINE bool
+static INLINE int
 tls_get_co(void)
 {
   return is_co;
@@ -175,12 +175,12 @@ tls_get_co(void)
 static INLINE void
 tls_switch_sh_tx(void)
 {  
-  is_co = true;
+  is_co = 1;
 }
 static INLINE void
 tls_switch_tx(void)
 {
-  is_co = false;
+  is_co = 0;
 }
 
 static INLINE void
