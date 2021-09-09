@@ -95,8 +95,8 @@ DEFINES += -DIRREVOCABLE_ENABLED
 # from disabling them.
 ########################################################################
 
-DEFINES += -DTM_STATISTICS
-# DEFINES += -UTM_STATISTICS
+# DEFINES += -DTM_STATISTICS
+DEFINES += -UTM_STATISTICS
 # DEFINES += -DTM_STATISTICS2
 DEFINES += -UTM_STATISTICS2
 
@@ -176,8 +176,8 @@ DEFINES += -ULOCK_IDX_SWAP
 # Output many (DEBUG) or even mode (DEBUG2) debugging messages.
 ########################################################################
 
-DEFINES += -DDEBUG
-# DEFINES += -UDEBUG
+# DDEFINES += -DDEBUG
+DEFINES += -UDEBUG
 # DEFINES += -DDEBUG2
 DEFINES += -UDEBUG2
 

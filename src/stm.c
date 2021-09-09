@@ -1193,7 +1193,28 @@ stm_TaskPop(int ver)
 }
 
 
+/* Wrapping Loop to task with given stride */
+_CALLCONV void
+stm_Loop2Task(long min, long max, long stride, int ver)
+{
+  TX_GET;
+  for (long start = min; start < max; start += stride) {
+    long end = MIN(min, (start+stride));
+    ws_task* taskPtr = ws_task_create(start, end);
+    int_stm_task_queue_enqueue(tx, taskPtr, ver);
+  }
+}
+
+
 #if CM == CM_COROUTINE
+
+
+_CALLCONV void
+stm_task_exit()
+{
+  TX_GET;
+  int_stm_task_exit(tx);
+}
 
 _CALLCONV int
 stm_isMain_coro()

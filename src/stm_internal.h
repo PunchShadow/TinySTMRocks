@@ -500,6 +500,9 @@ int_stm_stat_addTLS(stm_tx_t* tx);
 static INLINE void
 int_stm_print_stat(void);
 
+static INLINE void
+int_stm_stat_accum(stm_tx_t* tx);
+
 /* ################################################################### *
  * INLINE FUNCTIONS
  * ################################################################### */
@@ -584,12 +587,16 @@ stm_quiesce_exit_thread(stm_tx_t *tx)
 
   pthread_mutex_lock(&_tinystm.quiesce_mutex);
 #if defined(TM_STATISTICS) && CM == CM_COROUTINE
+  /*
   unsigned int nb_commits = 0;
   unsigned int nb_aborts = 0;
   tls_get_stat(&nb_commits, &nb_aborts);
   PRINT_DEBUG("==> stm_record: [tx:%p][nb_commits:%d][nb_aborts:%d]\n",tx, nb_commits, nb_aborts);
   _tinystm.to_nb_commits += nb_commits;
   _tinystm.to_nb_aborts += nb_aborts;
+  tls_set_stat(0, 0);
+  tls_set_stat(1, 0);
+  */
 #endif /* TM_STATISTICS && CM == CM_COROUTINE */
   
   /* Remove descriptor from list */
@@ -1290,6 +1297,10 @@ int_stm_init_thread(void)
   int is_co = tls_get_co();
   if (is_co == 1) {
     tx = tls_get_tx();
+    /* shadow_tx already exits */
+    if (tx != NULL) {
+      return tx;      
+    } 
     PRINT_DEBUG("==> stm_init_thread_is_co[%p]\n", tx);
   } else {
     if ((tx = tls_get_tx()) != NULL) {
@@ -1436,7 +1447,7 @@ int_stm_exit_thread(stm_tx_t *tx)
     printf("Thread %p | commits:%12u avg_aborts:%12.2f max_retries:%12u\n", (void *)pthread_self(), tx->stat_commits, avg_aborts, tx->stat_retries_max);
   }
 #if CM == CM_COROUTINE
-  int_stm_stat_addTLS(tx);
+  int_stm_stat_accum(tx);
 #endif /*CM == CM_COROUTINE */
 #endif /* TM_STATISTICS */
 
@@ -1828,6 +1839,9 @@ int_stm_task_queue_exit()
   for (long i=0; i < numThread; i++) {
     cur = _tinystm.task_queue_info[i]->task_queue;
     if (cur == NULL) continue;
+    if (cur->_top - cur->_bottom != 0) {
+      PRINT_DEBUG("==> stm_task_queue STILL HAVE TASK[tq:%p][top:%d][bottom:%d]\n", cur, cur->_top, cur->_bottom);
+    }
     // Free the multiple queues in one thread.
     do {
       tmp = cur->next;
@@ -2060,6 +2074,84 @@ int_stm_task_queue_end(stm_tx_t *tx)
 */
 #if CM == CM_COROUTINE
 
+static INLINE aco_t*
+int_stm_coro_check_pending(stm_tx_t* tx)
+{
+  for(int i = 0; i < tx->co_max; i++) {
+    if (tx->co[i] != NULL) {
+      if (tx->co[i]->is_end == 0) {
+        return tx->co[i];
+      } else {
+        continue;
+      }
+    } else {
+      continue;
+    }
+  }
+  /* If the return value is NULL -> no more pending coroutines in TX, 
+     else return the pointer of pending coroutine.
+  */
+  return NULL;
+}
+
+// TODO: Consider whether use 
+static INLINE void
+int_stm_task_enter(stm_tx_t* tx)
+{
+  int is_co = tls_get_co();
+  if (is_co == 1) {
+    /* First time use ShadowTask */
+    if (tx == NULL) {
+      tx = int_stm_init_thread();
+      int_stm_coro_init(tx);
+      int_stm_main_coro_init(tx, 2);
+    } else {
+      
+    }
+  } else {
+    int_stm_main_coro_init(tx, 2);
+  }
+}
+
+/* Check whether there is still pending coroutines and resume them 
+ * Called by task when task is ended.
+ * - Main co:       execute all pending non-main cos
+ * - Non-main co:   clean out shadow_tx's current co info & switch back to main co 
+ */
+static INLINE void
+int_stm_task_exit(stm_tx_t* tx)
+{
+  int is_co = tls_get_co();
+  if (is_co == 1) {
+    /* Reset the coroutine argruments */
+    tx->coro_func = NULL;
+    tx->coro_arg = NULL;
+    tx->main_co = NULL;
+    tx->is_co = 1;
+    tls_switch_tx(); // Switch to main-tx
+    aco_exit();
+  } else {
+    aco_t* pending_co = int_stm_coro_check_pending(tx);
+    while(pending_co != NULL) {
+      int_stm_coro_resume(tx, pending_co);
+      tx = tls_get_tx();
+      pending_co = int_stm_coro_check_pending(tx);
+    }
+    /* Clean up tx's coroutine info*/     
+    for(int i = 0; i < tx->co_max; i++) {
+      aco_destroy(tx->co[i]);
+      tx->co[i] = NULL;
+    }
+    aco_share_stack_destroy(tx->sstk);
+    tx->sstk = NULL;
+    aco_destroy(tx->main_co);
+    tx->main_co = NULL;
+  }
+}
+
+
+
+
 static INLINE void
 int_stm_coro_init(stm_tx_t* tx)
 {
@@ -2126,7 +2218,7 @@ int_stm_non_main_coro_create(stm_tx_t *tx, void (*coro_func)(), void* coro_arg)
 }
 
 
-/* Called by non-main coroutines */
+/* Called by non-main coroutines when exit thread */
 static INLINE void
 int_stm_non_main_coro_exit(void)
 {
@@ -2134,7 +2226,7 @@ int_stm_non_main_coro_exit(void)
 }
 
 
-/* Called by main thread */
+/* Called by main thread: int_stm_exit_thread() */
 static INLINE void
 int_stm_coro_exit(stm_tx_t *tx)
 {
@@ -2185,6 +2277,7 @@ int_stm_coro_resume(stm_tx_t* tx, aco_t *co)
   PRINT_DEBUG("==> Main resume[%lu][%p][%p]\n",pthread_self(), tx, co);
   //assert(tx->is_co == 0 && "Resume should be called by main coro\n");
   aco_resume(co);
+  tls_switch_tx(); // Switch back to main_thread tls
 }
 
 
@@ -2195,7 +2288,8 @@ int_stm_coro_yield(stm_tx_t* tx)
   tx = tls_get_tx(); // Reget tx descriptor
   //assert(tx->is_co == 1  && "Yield should be called by non-main coros\n");
   PRINT_DEBUG("==> Coro yield from[%lu][%p][%p]\n",pthread_self(), tx, aco_get_co());
-  aco_yield(); 
+  aco_yield();
+  tls_switch_sh_tx(); // Switch back to non-main 
 }
 
 
@@ -2271,11 +2365,25 @@ int_stm_get_coro_arg(stm_tx_t* tx)
   return tx->coro_arg;
 }
 
-
+#ifdef TM_STATISTICS
 /* Record cumulative stats to TLS 
 *  type: 0 nb_commit
 *        1 nb_abort
 */
+static INLINE void
+int_stm_stat_accum(stm_tx_t* tx)
+{
+  unsigned int commit = 0;
+  unsigned int abort = 0;
+  int_stm_get_stats(tx, "nb_commits", &commit);
+  int_stm_get_stats(tx, "nb_aborts", &abort);
+  pthread_mutex_lock(&_tinystm.quiesce_mutex);
+  _tinystm.to_nb_commits += commit;
+  _tinystm.to_nb_aborts += abort;
+  pthread_mutex_unlock(&_tinystm.quiesce_mutex);
+  PRINT_DEBUG("==> stm_stat_accum[tx:%p][commits:%d][abort:%d]\n", tx, commit, abort);
+}
+
 static INLINE void
 int_stm_stat_addTLS(stm_tx_t* tx)
 {
@@ -2312,7 +2420,7 @@ int_stm_print_stat(void)
   printf("          total_nb_commits: %d\n", _tinystm.to_nb_commits);
   printf("          total_nb_aborts:  %d\n", _tinystm.to_nb_aborts);
 }
-
+#endif /* TM_STATISTICS */
 
 #endif /* CM == CM_COROUTINE */
 

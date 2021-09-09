@@ -709,11 +709,13 @@ void stm_task_queue_partition(long min, long max, long stride) _CALLCONV;
 
 void stm_task_queue_get(long* startPtr, long* stopPtr) _CALLCONV;
 
-void stm_task_queue_register(void);
+void stm_task_queue_register(void) _CALLCONV;
 
-void stm_TaskPush(void* data, int ver);
+void stm_TaskPush(void* data, int ver) _CALLCONV;
 
-void* stm_TaskPop(int ver);
+void* stm_TaskPop(int ver) _CALLCONV;
+
+void stm_Loop2Task(long min, long max, long stride, int ver) _CALLCONV;
 
 sigjmp_buf *stm_task_queue_start(void);
 sigjmp_buf *stm_task_queue_end(void);
@@ -731,6 +733,7 @@ void* stm_get_coro_arg(void) _CALLCONV;
 
 void* stm_probe(void) _CALLCONV;
 
+void stm_task_exit(void) _CALLCONV;
 
 
 #ifdef __cplusplus

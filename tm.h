@@ -442,7 +442,7 @@
                                         stm_task_queue_exit(); \
                                         stm_exit()
 
-#      define TM_THREAD_ENTER()         stm_init_thread();
+#      define TM_THREAD_ENTER()         stm_init_thread()
 
 /* Jump to TM_PARTITION() and restart the task */
 #      define TM_THREAD_EXIT2()         do { \
@@ -471,6 +471,9 @@
                                                               if (_tq_start != NULL) sigsetjmp(*_tq_start, 0); \
                                                               stm_task_queue_get(startPtr, stopPtr); \
                                                             } while(0)
+/* Wrap for loop to tasks with specific version number */
+
+#      define TM_LOOP2TASK(min, max, stride, ver)  stm_Loop2Task(min, max, stride, ver)
 
 #      define TM_TaskPush(data, ver)    stm_TaskPush(data, ver)
 
@@ -480,6 +483,12 @@
                                         if(stm_isMain_coro() == 0) arg = stm_get_coro_arg() 
 
 #      define TM_PROBE()                stm_probe()
+
+#      define TM_TASK_ENTER()           stm_init_thread()
+
+#      define TM_TASK_EXIT()            stm_task_exit()
+
+#      define TM_BARRIER()              stm_TaskBarrier()
 
 #    endif /* !OTM */
 
