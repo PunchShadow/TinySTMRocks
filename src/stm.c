@@ -1145,7 +1145,7 @@ stm_task_queue_partition(long min, long max, long stride)
   // Wrap regions to tasks and push tasks into task queue.
   for (long i = start; i < stop; i += (stride)) {
     long end  = MIN(stop, (i + stride));
-    ws_task* task_ptr = ws_task_create(i, end);
+    ws_task* task_ptr = ws_task_create(i, end, NULL);
     PRINT_DEBUG("==> TM_PARTITION[%lu](%lu, %lu)\n", position, i, end);
     int_stm_task_queue_enqueue(tx, task_ptr, 0);
   }
@@ -1195,12 +1195,12 @@ stm_TaskPop(int ver)
 
 /* Wrapping Loop to task with given stride */
 _CALLCONV void
-stm_Loop2Task(long min, long max, long stride, int ver)
+stm_Loop2Task(long min, long max, long stride, int ver, void* data)
 {
   TX_GET;
   for (long start = min; start < max; start += stride) {
     long end = MIN(min, (start+stride));
-    ws_task* taskPtr = ws_task_create(start, end);
+    ws_task* taskPtr = ws_task_create(start, end, data);
     int_stm_task_queue_enqueue(tx, taskPtr, ver);
   }
 }

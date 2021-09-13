@@ -49,13 +49,14 @@ typedef struct ws_task_queue {
 
 
 static inline ws_task*
-ws_task_create(long start, long stop)
+ws_task_create(long start, long stop, void* data)
 {
     ws_task* task_ptr;
     task_ptr = malloc(sizeof(ws_task));
     task_ptr->start = start;
     task_ptr->end = stop;
-    
+    if (data != NULL) taskPtr->data = data;
+
     return task_ptr;
 }
 

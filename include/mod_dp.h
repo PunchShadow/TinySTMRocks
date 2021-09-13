@@ -70,7 +70,7 @@ mod_dp_task_queue_delete(ws_task_queue* ws_tq);
 
 
 
-ws_task* mod_dp_ws_task_create(long start, long end);
+ws_task* mod_dp_ws_task_create(long start, long end, void* data);
 
 void mod_dp_ws_task_delete(ws_task* task_ptr);
 
