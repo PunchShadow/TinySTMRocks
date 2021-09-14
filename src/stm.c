@@ -131,6 +131,10 @@ pthread_key_t thread_gc;
 #elif defined(TLS_COMPILER)
 __thread stm_tx_t* thread_tx = NULL;
 __thread long thread_gc = 0;
+#if defined(TM_STATISTICS)
+__thread unsigned int nb_commit = 0;
+__thread unsigned int nb_abort = 0;
+#endif /* TM_STATISTICS */
 #endif /* defined(TLS_COMPILER) */
 
 /* ################################################################### *
@@ -314,6 +318,10 @@ stm_exit(void)
 
   if (!_tinystm.initialized)
     return;
+
+#ifdef TM_STATISTICS
+  int_stm_print_stat();
+#endif /* TM_STATISTICS */
 
   tls_exit();
   stm_quiesce_exit();

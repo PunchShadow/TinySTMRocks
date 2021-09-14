@@ -114,6 +114,29 @@ tls_set_gc(long gc)
 #elif defined(TLS_COMPILER)
 extern __thread struct stm_tx * thread_tx;
 extern __thread long thread_gc;
+#if defined(TM_STATISTICS)
+extern __thread unsigned int nb_commit;
+extern __thread unsigned int nb_abort;
+
+static INLINE void
+tls_set_stat(int type, unsigned int nb)
+{
+  if (type == 0) nb_commit += nb;
+  else nb_abort += nb;
+}
+
+static INLINE void
+tls_get_stat(void* nb_commits, void* nb_aborts)
+{
+  *(unsigned int *)nb_commits = nb_commit;
+  *(unsigned int *)nb_aborts = nb_abort;
+}
+
+#endif /* TM_STATISTICS */
+
+
+
+
 
 static INLINE void
 tls_init(void)

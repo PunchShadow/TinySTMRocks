@@ -409,6 +409,10 @@ typedef struct {
 #if CM == CM_MODULAR
   int (*contention_manager)(stm_tx_t *, stm_tx_t *, int);
 #endif /* CM == CM_MODULAR */
+#ifdef TM_STATISTICS
+  unsigned int to_nb_commits;
+  unsigned int to_nb_aborts;
+#endif /* TM_STATISTICS */
   /* At least twice a cache line (256 bytes to be on the safe side) */
   char padding[CACHELINE_SIZE];
 } ALIGNED global_t;
@@ -432,6 +436,12 @@ extern global_t _tinystm;
 
 static NOINLINE void
 stm_rollback(stm_tx_t *tx, unsigned int reason);
+
+static INLINE void
+int_stm_stat_addTLS(stm_tx_t* tx);
+
+static INLINE void
+int_stm_print_stat(void);
 
 /* ################################################################### *
  * INLINE FUNCTIONS
@@ -468,6 +478,10 @@ stm_quiesce_init(void)
   _tinystm.quiesce = 0;
   _tinystm.threads_nb = 0;
   _tinystm.threads = NULL;
+#ifdef TM_STATISTICS
+  _tinystm.to_nb_commits = 0;
+  _tinystm.to_nb_aborts = 0;
+#endif /* TM_STATISTICS */
 }
 
 /*
@@ -515,6 +529,14 @@ stm_quiesce_exit_thread(stm_tx_t *tx)
   /* Remove descriptor from list */
   p = NULL;
   t = _tinystm.threads;
+#ifdef TM_STATISTICS
+  unsigned int nb_commits = 0;
+  unsigned int nb_aborts = 0;
+  tls_get_stat(&nb_commits, &nb_aborts);
+  PRINT_DEBUG("==> stm_record: [tx:%p][nb_commits:%d][nb_aborts:%d]\n",tx, nb_commits, nb_aborts);
+  _tinystm.to_nb_commits += nb_commits;
+  _tinystm.to_nb_aborts += nb_aborts;  
+#endif /* TM_STATISTICS */
   while (t != tx) {
     assert(t != NULL);
     p = t;
@@ -1320,6 +1342,7 @@ int_stm_exit_thread(stm_tx_t *tx)
       avg_aborts = (double)tx->stat_aborts / tx->stat_commits;
     printf("Thread %p | commits:%12u avg_aborts:%12.2f max_retries:%12u\n", (void *)pthread_self(), tx->stat_commits, avg_aborts, tx->stat_retries_max);
   }
+  int_stm_stat_addTLS(tx);
 #endif /* TM_STATISTICS */
 
   stm_quiesce_exit_thread(tx);
@@ -1646,6 +1669,51 @@ int_stm_get_specific(stm_tx_t *tx, int key)
   assert (tx != NULL && key >= 0 && key < _tinystm.nb_specific);
   return (void *)ATOMIC_LOAD(&tx->data[key]);
 }
+
+#ifdef TM_STATISTICS
+/* Record cumulative stats to TLS 
+*  type: 0 nb_commit
+*        1 nb_abort
+*/
+static INLINE void
+int_stm_stat_addTLS(stm_tx_t* tx)
+{
+  unsigned int commit = 0;
+  unsigned int abort = 0;
+  int_stm_get_stats(tx, "nb_commits", &commit);
+  tls_set_stat(0, commit);
+  int_stm_get_stats(tx, "nb_aborts", &abort);
+  tls_set_stat(1, abort);
+  PRINT_DEBUG("==> stm_stat_addTLS[tx:%p][commit:%d][abort:%d]\n", tx, commit, abort);
+}
+
+static INLINE void
+int_stm_print_stat(void)
+{
+  stm_tx_t* t;
+  unsigned int commit_nb, abort_nb;
+  unsigned int cum_com_nb = 0, cum_ab_nb = 0;
+  int i = 0;
+  printf("********************************************\n");
+  printf("*              STATISTICS                  *\n");
+  printf("********************************************\n");
+
+  for (t = _tinystm.threads; t != NULL; t = t->next, i++) {
+    tls_get_stat(&commit_nb, &abort_nb);
+    printf("- Thread: %d\n", i);
+    printf("           nb_commits: %d\n", commit_nb);
+    printf("           nb_aborts:  %d\n", abort_nb);
+    printf("\n");
+    cum_com_nb += commit_nb;
+    cum_ab_nb += abort_nb;    
+  }
+  printf("- Summary:\n");
+  printf("          total_nb_commits: %d\n", _tinystm.to_nb_commits);
+  printf("          total_nb_aborts:  %d\n", _tinystm.to_nb_aborts);
+}
+
+#endif /* TM_STATISTICS */
+
 
 #endif /* _STM_INTERNAL_H_ */
 
