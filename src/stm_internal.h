@@ -84,6 +84,10 @@
 # error "HYBRID_ASF can only be used with SUICIDE contention manager"
 #endif /* defined(HYBRID_ASF) && CM != CM_SUICIDE */
 
+#if defined(CONFLICT_RECORDING) && (! defined(CONFLICT_TRACKING) || ! defined(TX_NUMBERING))
+# error "CONFLICT_RECORDING can only be used with CONFLICT_TRACKING and TX_NUMBERING"
+#endif /* defined(CONFLICT_RECORDING) && ! defined(CONFLICT_TRACKING)*/
+
 #define TX_GET                          stm_tx_t *tx = tls_get_tx()
 
 #ifndef RW_SET_SIZE
@@ -220,7 +224,6 @@ enum {                                  /* Transaction status */
 #ifdef UNIT_TX
 # define LOCK_UNIT                       (~(stm_word_t)0)
 #endif /* UNIT_TX */
-
 /*
  * We use the very same hash functions as TL2 for degenerate Bloom
  * filters on 32 bits.
@@ -345,6 +348,9 @@ typedef struct stm_tx {                 /* Transaction descriptor */
 #ifdef CONFLICT_TRACKING
   pthread_t thread_id;                  /* Thread identifier (immutable) */
 #endif /* CONFLICT_TRACKING */
+#ifdef TX_NUMBERING
+  int cur_tx_num;                       /* Identify execution transction through __COUNTER__ */
+#endif /* TX_NUMBERING */
 #if CM == CM_DELAY || CM == CM_MODULAR
   volatile stm_word_t *c_lock;          /* Pointer to contented lock (cause of abort) */
 #endif /* CM == CM_DELAY || CM == CM_MODULAR */
@@ -1300,6 +1306,9 @@ int_stm_init_thread(void)
 #ifdef IRREVOCABLE_ENABLED
   tx->irrevocable = 0;
 #endif /* IRREVOCABLE_ENABLED */
+#ifdef TX_NUMBERING
+  tx->cur_tx_num = -1; // To identify the initial state.
+#endif /* TX_NUMBERING */
   /* Store as thread-local data */
   tls_set_tx(tx);
   stm_quiesce_enter_thread(tx);
@@ -1363,7 +1372,7 @@ int_stm_exit_thread(stm_tx_t *tx)
 }
 
 static INLINE sigjmp_buf *
-int_stm_start(stm_tx_t *tx, stm_tx_attr_t attr)
+int_stm_start(stm_tx_t *tx, stm_tx_attr_t attr, int numbering)
 {
   PRINT_DEBUG("==> stm_start(%p)\n", tx);
 
@@ -1376,6 +1385,14 @@ int_stm_start(stm_tx_t *tx, stm_tx_attr_t attr)
 
   /* Attributes */
   tx->attr = attr;
+
+#ifdef TX_NUMBERING
+  if (tx->cur_tx_num == -1) {tx->cur_tx_num = numbering;}
+  else {
+    if (numbering > tx->cur_tx_num) tx->cur_tx_num = numbering;
+  }
+  PRINT_DEBUG("TX_NUMBERING: current execution:[tx:%p][%d]\n",tx, tx->cur_tx_num);
+#endif /* TX_NUMBERING */
 
   /* Initialize transaction descriptor */
   int_stm_prepare(tx);

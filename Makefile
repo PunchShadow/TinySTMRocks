@@ -141,8 +141,8 @@ DEFINES += -DUSE_BLOOM_FILTER
 # enabling this feature.
 ########################################################################
 
-# DEFINES += -DEPOCH_GC
-DEFINES += -UEPOCH_GC
+DEFINES += -DEPOCH_GC
+# DEFINES += -UEPOCH_GC
 
 ########################################################################
 # Keep track of conflicts between transactions and notifies the
@@ -151,8 +151,23 @@ DEFINES += -UEPOCH_GC
 # requires EPOCH_GC.
 ########################################################################
 
-# DEFINES += -DCONFLICT_TRACKING
-DEFINES += -UCONFLICT_TRACKING
+DEFINES += -DCONFLICT_TRACKING
+# DEFINES += -UCONFLICT_TRACKING
+
+########################################################################
+# Record conflict to file(conflict_list.txt) while conflict is happening
+########################################################################
+
+DEFINES += -DCONFLICT_RECORDING
+# DEFINES += -UCONFLICT_RECORDING
+
+########################################################################
+# Number each transaction with preprocessor (__COUNTER__) for conflict
+# recording
+########################################################################
+
+DEFINES += -DTX_NUMBERING
+# DEFINES += UTX_NUMBERING
 
 ########################################################################
 # Allow transactions to read the previous version of locked memory
@@ -182,8 +197,8 @@ DEFINES += -ULOCK_IDX_SWAP
 # Output many (DEBUG) or even mode (DEBUG2) debugging messages.
 ########################################################################
 
-# DEFINES += -DDEBUG
-DEFINES += -UDEBUG
+DEFINES += -DDEBUG
+# DEFINES += -UDEBUG
 # DEFINES += -DDEBUG2
 DEFINES += -UDEBUG2
 

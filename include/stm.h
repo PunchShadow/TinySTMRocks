@@ -79,7 +79,6 @@
 # include <stdint.h>
 # include <stdio.h>
 # include <stdlib.h>
-
 /**
  * Version string
  */
@@ -313,8 +312,8 @@ void stm_exit_thread_tx(struct stm_tx *tx) _CALLCONV;
  *   sigsetjmp() as an abort will restart the top-level transaction
  *   (flat nesting).
  */
-sigjmp_buf *stm_start(stm_tx_attr_t attr) _CALLCONV;
-sigjmp_buf *stm_start_tx(struct stm_tx *tx, stm_tx_attr_t attr) _CALLCONV;
+sigjmp_buf *stm_start(stm_tx_attr_t attr, int numbering) _CALLCONV;
+sigjmp_buf *stm_start_tx(struct stm_tx *tx, stm_tx_attr_t attr, int numbering) _CALLCONV;
 //@}
 
 //@{
@@ -696,6 +695,11 @@ stm_word_t stm_get_clock(void) _CALLCONV;
 int stm_set_irrevocable(int serial) _CALLCONV;
 int stm_set_irrevocable_tx(struct stm_tx *tx, int serial) _CALLCONV;
 //@}
+
+#ifdef CONFLICT_TRACKING
+int stm_get_thread_id(struct stm_tx *tx, pthread_t *id) _CALLCONV;
+int stm_set_conflict_cb(void (*on_conflict)(struct stm_tx *tx1, struct stm_tx *tx2)) _CALLCONV;
+#endif /* CONFLICT_TRACKING */
 
 #ifdef HYBRID_ASF
 

@@ -80,6 +80,23 @@ int stm_on_abort(void (*on_abort)(void *arg), void *arg);
  */
 void mod_cb_init(void);
 
+
+/**
+ * Register an application-specific callback triggered when the current
+ * transaction conflict. The callback should be used when 
+ * conflict_tracking attribute is enabled. If transaction does not 
+ * conflict, the callback is never triggered.
+ * Use stm.h: stm_set_conflict_cb() function
+ * 
+ * @param filename
+ *   output file name.
+ * @return 
+ *   1 if the callback have been successfully registered, 0 otherwise.
+ */
+int stm_on_conflict(char* filename);
+
+
+
 # ifdef __cplusplus
 }
 # endif

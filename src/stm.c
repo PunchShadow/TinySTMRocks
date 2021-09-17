@@ -38,6 +38,10 @@
 #include "atomic.h"
 #include "gc.h"
 
+#if defined(CONFLICT_TRACKING) && defined(CONFLICT_RECORDING)
+# include "mod_cb_conflict.h"
+#endif /* defined(CONFLICT_TRACKING) && defined(CONFLICT_RECORDING) */
+
 #ifdef HYBRID_ASF
 # include "asf/asf-highlevel.h"
 /* Abort status */
@@ -305,6 +309,10 @@ stm_init(void)
     }
   }
 #endif /* SIGNAL_HANDLER */
+#if defined(CONFLICT_TRACKING) && defined(CONFLICT_RECORDING)
+  // Register conflict callback
+  mod_cb_conflict_init();
+#endif /* defined(CONFLICT_TRACKING) && defined(CONFLICT_RECORDING) */
   _tinystm.initialized = 1;
 }
 
@@ -362,16 +370,16 @@ stm_exit_thread_tx(stm_tx_t *tx)
  * Called by the CURRENT thread to start a transaction.
  */
 _CALLCONV sigjmp_buf *
-stm_start(stm_tx_attr_t attr)
+stm_start(stm_tx_attr_t attr, int numbering)
 {
   TX_GET;
-  return int_stm_start(tx, attr);
+  return int_stm_start(tx, attr, numbering);
 }
 
 _CALLCONV sigjmp_buf *
-stm_start_tx(stm_tx_t *tx, stm_tx_attr_t attr)
+stm_start_tx(stm_tx_t *tx, stm_tx_attr_t attr, int numbering)
 {
-  return int_stm_start(tx, attr);
+  return int_stm_start(tx, attr, numbering);
 }
 
 /*
