@@ -1189,7 +1189,7 @@ stm_TaskPop(int ver)
   //PRINT_DEBUG("==> stm_TaskPop[%lu] ver: %d\n", tx->task_queue_position, ver);
   taskPtr = int_stm_task_queue_dequeue(tx, ver);
   if (taskPtr == NULL) return NULL;
-  return taskPtr->data;
+  return taskPtr;
 }
 
 
@@ -1199,7 +1199,7 @@ stm_Loop2Task(long min, long max, long stride, int ver, void* data)
 {
   TX_GET;
   for (long start = min; start < max; start += stride) {
-    long end = MIN(min, (start+stride));
+    long end = MIN(max, (start+stride));
     ws_task* taskPtr = ws_task_create(start, end, data);
     int_stm_task_queue_enqueue(tx, taskPtr, ver);
   }

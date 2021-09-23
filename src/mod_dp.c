@@ -29,12 +29,13 @@ mod_dp_task_queue_delete(ws_task_queue* ws_tq)
 
 
 ws_task* 
-mod_dp_ws_task_create(long start, long end)
+mod_dp_ws_task_create(long start, long end, void* data)
 {
     ws_task* task_ptr;
     task_ptr = malloc(sizeof(ws_task));
     task_ptr->start = start;
     task_ptr->end = end;
+    task_ptr->data = data;
 
     return task_ptr;
 }

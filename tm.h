@@ -419,6 +419,13 @@
 
 #      include <mod_mem.h>
 #      include <mod_stats.h>
+#      include <task_queue.h>
+
+// typedef struct ws_task {
+//   long start;
+//   long end;
+//   void* data;
+// } ws_task;
 
 #      define TM_STARTUP(numThread)     if (sizeof(long) != sizeof(void *)) { \
                                           fprintf(stderr, "Error: unsupported long and pointer sizes\n"); \
@@ -473,7 +480,7 @@
                                                             } while(0)
 /* Wrap for loop to tasks with specific version number */
 
-#      define TM_LOOP2TASK(min, max, stride, ver)  stm_Loop2Task(min, max, stride, ver)
+#      define TM_LOOP2TASK(min, max, stride, ver, verbose)  stm_Loop2Task(min, max, stride, ver, verbose)
 
 #      define TM_TaskPush(data, ver)    stm_TaskPush(data, ver)
 

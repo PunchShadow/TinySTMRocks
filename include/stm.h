@@ -715,7 +715,7 @@ void stm_TaskPush(void* data, int ver) _CALLCONV;
 
 void* stm_TaskPop(int ver) _CALLCONV;
 
-void stm_Loop2Task(long min, long max, long stride, int ver) _CALLCONV;
+void stm_Loop2Task(long min, long max, long stride, int ver, void* data) _CALLCONV;
 
 sigjmp_buf *stm_task_queue_start(void);
 sigjmp_buf *stm_task_queue_end(void);

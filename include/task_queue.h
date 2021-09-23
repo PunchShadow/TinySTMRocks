@@ -55,7 +55,7 @@ ws_task_create(long start, long stop, void* data)
     task_ptr = malloc(sizeof(ws_task));
     task_ptr->start = start;
     task_ptr->end = stop;
-    if (data != NULL) taskPtr->data = data;
+    task_ptr->data = data;
 
     return task_ptr;
 }

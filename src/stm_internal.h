@@ -1840,7 +1840,7 @@ int_stm_task_queue_exit()
     cur = _tinystm.task_queue_info[i]->task_queue;
     if (cur == NULL) continue;
     if (cur->_top - cur->_bottom != 0) {
-      PRINT_DEBUG("==> stm_task_queue STILL HAVE TASK[tq:%p][top:%d][bottom:%d]\n", cur, cur->_top, cur->_bottom);
+      PRINT_DEBUG("==> stm_task_queue STILL HAVE TASK[tq:%p][top:%ld][bottom:%ld]\n", cur, cur->_top, cur->_bottom);
     }
     // Free the multiple queues in one thread.
     do {
@@ -2124,6 +2124,7 @@ int_stm_task_exit(stm_tx_t* tx)
   int is_co = tls_get_co();
   if (is_co == 1) {
     /* Reset the coroutine argruments */
+    PRINT_DEBUG("==> stm_co_task_exit[tx:%p]\n", tx);
     tx->coro_func = NULL;
     tx->coro_arg = NULL;
     tx->main_co = NULL;
@@ -2131,6 +2132,7 @@ int_stm_task_exit(stm_tx_t* tx)
     tls_switch_tx(); // Switch to main-tx
     aco_exit();
   } else {
+    PRINT_DEBUG("==> stm_main_task_exit[%p]\n", tx);
     aco_t* pending_co = int_stm_coro_check_pending(tx);
     while(pending_co != NULL) {
       int_stm_coro_resume(tx, pending_co);
@@ -2138,6 +2140,7 @@ int_stm_task_exit(stm_tx_t* tx)
       pending_co = int_stm_coro_check_pending(tx);
     }
     /* Clean up tx's coroutine info*/     
+    /*
     for(int i = 0; i < tx->co_max; i++) {
       aco_destroy(tx->co[i]);
       tx->co[i] = NULL;
@@ -2146,6 +2149,7 @@ int_stm_task_exit(stm_tx_t* tx)
     tx->sstk = NULL;
     aco_destroy(tx->main_co);
     tx->main_co = NULL;
+    */
   }
 }
 
@@ -2419,6 +2423,8 @@ int_stm_print_stat(void)
   printf("- Summary:\n");
   printf("          total_nb_commits: %d\n", _tinystm.to_nb_commits);
   printf("          total_nb_aborts:  %d\n", _tinystm.to_nb_aborts);
+  printf("          abort_rate:       %.6f\n", (double)_tinystm.to_nb_commits/(double)_tinystm.to_nb_aborts);
+  
 }
 #endif /* TM_STATISTICS */
 
