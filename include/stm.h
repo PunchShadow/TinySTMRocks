@@ -711,11 +711,62 @@ void stm_task_queue_get(long* startPtr, long* stopPtr) _CALLCONV;
 
 void stm_task_queue_register(void) _CALLCONV;
 
-void stm_TaskPush(void* data, int ver) _CALLCONV;
+/**
+ * Push task with correspoding version to its own thread's task queue.
+ * Different version of tasks are stored in separate task queues.
+ * 
+ * @param taskPtr
+ *    Pointer to the object of task
+ * @param ver
+ *    Task version assigned by programmer
+*/
+void stm_TaskPush(void* taskPtr, int ver) _CALLCONV;
 
+
+/**
+ * Split tasks averagely to each threads' task queues.
+ * The function is called by main thread for creating
+ * tasks serially. This function is only CALLED BY 
+ * MAIN THREAD
+ * 
+ * @param taskPtr
+ *    Pointer to the object of task
+ * @param ver
+ *    Task version assigned by the programmer
+*/
+void stm_TaskSplit(void* taskPtr, int ver) _CALLCONV;
+
+/**
+ * Pop task from caller thread's task queue with corresponding task
+ * version.
+ *  
+ * @param ver
+ *    Task version assigned by programmer
+ * @return
+ *    Void pointer to the object of task pushed with stm_TaskPush(ver).
+*/
 void* stm_TaskPop(int ver) _CALLCONV;
 
+/**
+ * Tranfer loop to separate ws_tasks with given version and verbosed data.
+ * A ws_task object contains start, end and data attributes to cut
+ * loop to pieces of small loop.
+ * 
+ * @param min
+ *    Start of the small loop
+ * @param max
+ *    End of the small loop
+ * @param stride
+ *    The range of this task
+ * @param ver
+ *    Task version
+ * @param data
+ *    Verbose data
+*/
 void stm_Loop2Task(long min, long max, long stride, int ver, void* data) _CALLCONV;
+
+
+
 
 sigjmp_buf *stm_task_queue_start(void);
 sigjmp_buf *stm_task_queue_end(void);

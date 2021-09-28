@@ -437,12 +437,13 @@ typedef struct {
   unsigned long task_queue_nb;
   int task_queue_retry_time;
 #ifdef WORK_STEALING
+  long task_queue_split_index;          /* Identify the next index of task queue to split task to, if index == -1 means no previous separate. */
   pthread_mutex_t taskqueue_mutex;      /* Mutex to support register task queue */
 #endif /* WORK_STEALING */
-#if defined(TM_STATISTICS) && CM == CM_COROUTINE
+#ifdef TM_STATISTICS
   unsigned int to_nb_commits;
   unsigned int to_nb_aborts;
-#endif /* TM_STATISTICS && CM == CM_COROUTINE */
+#endif /* TM_STATISTICS */
 
   /* At least twice a cache line (256 bytes to be on the safe side) */
   char padding[CACHELINE_SIZE];
@@ -538,10 +539,10 @@ stm_quiesce_init(void)
   _tinystm.quiesce = 0;
   _tinystm.threads_nb = 0;
   _tinystm.threads = NULL;
-#if defined(TM_STATISTICS) && CM == CM_COROUTINE
+#ifdef TM_STATISTICS
   _tinystm.to_nb_commits = 0;
   _tinystm.to_nb_aborts = 0;
-#endif /* TM_STATISTICS && CM == CM_COROUTINE */ 
+#endif /* TM_STATISTICS */ 
 }
 
 /*
@@ -1446,9 +1447,7 @@ int_stm_exit_thread(stm_tx_t *tx)
       avg_aborts = (double)tx->stat_aborts / tx->stat_commits;
     printf("Thread %p | commits:%12u avg_aborts:%12.2f max_retries:%12u\n", (void *)pthread_self(), tx->stat_commits, avg_aborts, tx->stat_retries_max);
   }
-#if CM == CM_COROUTINE
-  int_stm_stat_accum(tx);
-#endif /*CM == CM_COROUTINE */
+  int_stm_stat_accum(tx); // Write accum to TLS
 #endif /* TM_STATISTICS */
 
 #if CM == CM_COROUTINE
@@ -1817,14 +1816,16 @@ int_stm_task_queue_victim_select(stm_tx_t *t)
 static INLINE void
 int_stm_task_queue_init(long numThread)
 {
-  PRINT_DEBUG("==>stm_task_queue_init\n");
+  
   _tinystm.task_queue_retry_time = 10; // The retry time to steal task
+  _tinystm.task_queue_split_index = -1; // Initalize the split index
   _tinystm.task_queue_info = malloc(sizeof(thread_task_queue_info*) * numThread );
   for ( long i=0; i < numThread; i++) {
     _tinystm.task_queue_info[i] = malloc(sizeof(thread_task_queue_info));
     _tinystm.task_queue_info[i]->task_queue = NULL;
   }
   _tinystm.task_queue_nb = numThread; 
+  PRINT_DEBUG("==>stm_task_queue_init[tq_nb:%lu][%ld]\n", _tinystm.task_queue_nb, _tinystm.task_queue_split_index);
 }
 
 
@@ -1862,7 +1863,7 @@ int_stm_task_queue_register(stm_tx_t *tx)
 {
   pthread_t thread_id = pthread_self();
   long numThread = _tinystm.task_queue_nb;
-  
+  PRINT_DEBUG("==> stm_task_queue_register[tx:%p][id:%lu]\n", tx, thread_id);
 #if CM == CM_COROUTINE
   /*
   int finded = 0;
@@ -1880,9 +1881,31 @@ int_stm_task_queue_register(stm_tx_t *tx)
   }
   */
 #endif /* CM == CM_COROUTINE */  
+  tx->task_queue_position = -1;
+
+  /* Task queues are first initialized by TaskSplit function */
+  if(_tinystm.task_queue_split_index != -1) {
+    pthread_mutex_lock(&_tinystm.taskqueue_mutex);
+    for(long i = 0; i < numThread; i++) {
+      if(_tinystm.task_queue_info[i]->task_queue != NULL) {
+        /* Task queue has tasks inside but not belows to any threads */
+        if(_tinystm.task_queue_info[i]->thread_id == -1) {
+          tx->task_queue_position = i;
+          _tinystm.task_queue_info[i]->thread_id = thread_id; // Register new thread id
+          PRINT_DEBUG("==> stm_task_queue_SPLIT_match[tx:%p][id:%lu]\n", tx, thread_id);
+          pthread_mutex_unlock(&_tinystm.taskqueue_mutex);
+          return;
+        }
+      }
+    }
+    pthread_mutex_unlock(&_tinystm.taskqueue_mutex);
+    if(tx->task_queue_position == -1) {
+      PRINT_DEBUG("==> ERROR REGISTER[tx:%p][id:%lu]!!!\n", tx, thread_id);
+    }
+
+  }
 
   /* Check whether the thread has already registers */
-  tx->task_queue_position = -1;
   for (long i=0; i < numThread; i++) {
     if (_tinystm.task_queue_info[i]->task_queue != NULL) {
       if (_tinystm.task_queue_info[i]->thread_id == thread_id) {
@@ -1909,6 +1932,7 @@ int_stm_task_queue_register(stm_tx_t *tx)
         _tinystm.task_queue_info[i]->thread_id = thread_id;
         tx->task_queue_position = i;
         tx->cur_task_version = 0;
+        pthread_mutex_unlock(&_tinystm.taskqueue_mutex);
         break;
       }
     }
@@ -1942,6 +1966,44 @@ int_stm_task_queue_register(stm_tx_t *tx)
   }
   */
 }
+
+static INLINE void
+int_stm_task_queue_split(ws_task* ws_task, int version)
+{
+  size_t num_task;
+  /* Find the next index to push task to. */
+  long index = (_tinystm.task_queue_split_index + 1) % _tinystm.task_queue_nb;
+  /* First time access the task queue, so we need to initialize. */
+  if(_tinystm.task_queue_info[index]->task_queue == NULL) {
+    _tinystm.task_queue_info[index]->task_queue = ws_task_queue_new(version);
+    _tinystm.task_queue_info[index]->thread_id = -1;
+    PRINT_DEBUG("==> stm_task_queue_split_init:[index:%lu]\n", index);
+  }
+  
+  ws_task_queue* tq = _tinystm.task_queue_info[index]->task_queue;
+  ws_task_queue* tmp = _tinystm.task_queue_info[index]->task_queue;
+  PRINT_DEBUG("==> stm_task_queue_split[tq:%p][index:%lu]\n", tq, index);
+  /* Search corresponding version of task queue */
+  while (tq != NULL) {
+    if (version == tq->taskNum) break;
+    else {
+      tmp = tq;
+      tq = tq->next;
+    }
+  }
+  /* If there is no corresponding version, create new one. */
+  if (tq == NULL) {
+    tq = ws_task_queue_new(version);
+    tmp->next = tq;
+    PRINT_DEBUG("==> stm_task_split_new_task_queue[tq:%p]\n", tq);
+  }
+  ws_task_queue_push(tq, ws_task, &num_task);
+
+  _tinystm.task_queue_split_index++; // Update the next split index.
+  PRINT_DEBUG("==> _tinystm.task_queue_split_index:[%lu]\n", _tinystm.task_queue_split_index);
+  PRINT_DEBUG("==> stm_task_split[tq:%p][index:%lu][size:%d]\n",tq, index, ((int)tq->_bottom - (int)tq->_top));
+}
+
 
 static INLINE void
 int_stm_task_queue_enqueue(stm_tx_t *t, ws_task* ws_task, int version)
@@ -2369,6 +2431,9 @@ int_stm_get_coro_arg(stm_tx_t* tx)
   return tx->coro_arg;
 }
 
+
+#endif /* CM == CM_COROUTINE */
+
 #ifdef TM_STATISTICS
 /* Record cumulative stats to TLS 
 *  type: 0 nb_commit
@@ -2388,47 +2453,47 @@ int_stm_stat_accum(stm_tx_t* tx)
   PRINT_DEBUG("==> stm_stat_accum[tx:%p][commits:%d][abort:%d]\n", tx, commit, abort);
 }
 
-static INLINE void
-int_stm_stat_addTLS(stm_tx_t* tx)
-{
-  unsigned int commit = 0;
-  unsigned int abort = 0;
-  int_stm_get_stats(tx, "nb_commits", &commit);
-  tls_set_stat(0, commit);
-  int_stm_get_stats(tx, "nb_aborts", &abort);
-  tls_set_stat(1, abort);
-  PRINT_DEBUG("==> stm_stat_addTLS[tx:%p][commit:%d][abort:%d]\n", tx, commit, abort);
-}
+
+// static INLINE void
+// int_stm_stat_addTLS(stm_tx_t* tx)
+// {
+//   unsigned int commit = 0;
+//   unsigned int abort = 0;
+//   int_stm_get_stats(tx, "nb_commits", &commit);
+//   tls_set_stat(0, commit);
+//   int_stm_get_stats(tx, "nb_aborts", &abort);
+//   tls_set_stat(1, abort);
+//   PRINT_DEBUG("==> stm_stat_addTLS[tx:%p][commit:%d][abort:%d]\n", tx, commit, abort);
+// }
 
 static INLINE void
 int_stm_print_stat(void)
 {
-  stm_tx_t* t;
-  unsigned int commit_nb, abort_nb;
-  unsigned int cum_com_nb = 0, cum_ab_nb = 0;
-  int i = 0;
+  // stm_tx_t* t;
+  // unsigned int commit_nb, abort_nb;
+  // unsigned int cum_com_nb = 0, cum_ab_nb = 0;
+  // int i = 0;
   printf("********************************************\n");
   printf("*              STATISTICS                  *\n");
   printf("********************************************\n");
 
-  for (t = _tinystm.threads; t != NULL; t = t->next, i++) {
-    tls_get_stat(&commit_nb, &abort_nb);
-    printf("- Thread: %d\n", i);
-    printf("           nb_commits: %d\n", commit_nb);
-    printf("           nb_aborts:  %d\n", abort_nb);
-    printf("\n");
-    cum_com_nb += commit_nb;
-    cum_ab_nb += abort_nb;    
-  }
+  // for (t = _tinystm.threads; t != NULL; t = t->next, i++) {
+  //   tls_get_stat(&commit_nb, &abort_nb);
+  //   printf("- Thread: %d\n", i);
+  //   printf("           nb_commits: %d\n", commit_nb);
+  //   printf("           nb_aborts:  %d\n", abort_nb);
+  //   printf("\n");
+  //   cum_com_nb += commit_nb;
+  //   cum_ab_nb += abort_nb;    
+  // }
   printf("- Summary:\n");
   printf("          total_nb_commits: %d\n", _tinystm.to_nb_commits);
   printf("          total_nb_aborts:  %d\n", _tinystm.to_nb_aborts);
-  printf("          abort_rate:       %.6f\n", (double)_tinystm.to_nb_commits/(double)_tinystm.to_nb_aborts);
+  printf("          abort_rate:       %.6f\n", (double)_tinystm.to_nb_commits/((double)_tinystm.to_nb_commits+(double)_tinystm.to_nb_aborts));
   
 }
 #endif /* TM_STATISTICS */
 
-#endif /* CM == CM_COROUTINE */
 
 
 

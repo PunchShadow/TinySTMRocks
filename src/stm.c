@@ -318,11 +318,10 @@ stm_exit(void)
   if (!_tinystm.initialized)
     return;
 
-#if CM == CM_COROUTINE
 #ifdef TM_STATISTICS
   int_stm_print_stat();
 #endif /* TM_STATISTICS */
-#endif /* CM == CM_COROUTINE */
+
  
   tls_exit();
   stm_quiesce_exit();
@@ -1172,6 +1171,9 @@ stm_task_queue_get(long* startPtr, long* stopPtr)
 
 }
 
+/**
+ * Push task to its own thread's task queue
+*/
 _CALLCONV void
 stm_TaskPush(void* data, int ver)
 {
@@ -1203,6 +1205,13 @@ stm_Loop2Task(long min, long max, long stride, int ver, void* data)
     ws_task* taskPtr = ws_task_create(start, end, data);
     int_stm_task_queue_enqueue(tx, taskPtr, ver);
   }
+}
+
+_CALLCONV void
+stm_TaskSplit(void* data, int ver)
+{
+  ws_task* taskPtr = gws_task_create(data);
+  int_stm_task_queue_split(taskPtr, ver);
 }
 
 
