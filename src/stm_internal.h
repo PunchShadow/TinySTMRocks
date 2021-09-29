@@ -1895,12 +1895,22 @@ int_stm_task_queue_register(stm_tx_t *tx)
           PRINT_DEBUG("==> stm_task_queue_SPLIT_match[tx:%p][id:%lu]\n", tx, thread_id);
           pthread_mutex_unlock(&_tinystm.taskqueue_mutex);
           return;
+        } 
+#if CM == CM_COROUTINE
+        else if(_tinystm.task_queue_info[i]->thread_id == thread_id) {
+          /* Coroutine Match the split task queue */
+          tx->task_queue_position = i;
+          PRINT_DEBUG("==> stm_task_queue_SPLIT_match_co[tx:%p][id:%lu]\n", tx, thread_id);
+          pthread_mutex_unlock(&_tinystm.taskqueue_mutex);
+          return;
         }
+#endif /* CM == CM_COROUTINE */
       }
     }
     pthread_mutex_unlock(&_tinystm.taskqueue_mutex);
     if(tx->task_queue_position == -1) {
       PRINT_DEBUG("==> ERROR REGISTER[tx:%p][id:%lu]!!!\n", tx, thread_id);
+      assert(0);
     }
 
   }
@@ -1940,6 +1950,7 @@ int_stm_task_queue_register(stm_tx_t *tx)
   }
   if (tx->task_queue_position < 0) {
     PRINT_DEBUG("[tx:%p][id:%lu]Cannot register\n", tx, thread_id);
+    assert(0);
   }
   PRINT_DEBUG("==> stm_task_queue_create[tx:%p][position%lu]\n", tx, tx->task_queue_position);
   
@@ -2489,7 +2500,7 @@ int_stm_print_stat(void)
   printf("- Summary:\n");
   printf("          total_nb_commits: %d\n", _tinystm.to_nb_commits);
   printf("          total_nb_aborts:  %d\n", _tinystm.to_nb_aborts);
-  printf("          abort_rate:       %.6f\n", (double)_tinystm.to_nb_commits/((double)_tinystm.to_nb_commits+(double)_tinystm.to_nb_aborts));
+  printf("          commit_rate:       %.6f\n", (double)_tinystm.to_nb_commits/((double)_tinystm.to_nb_commits+(double)_tinystm.to_nb_aborts));
   
 }
 #endif /* TM_STATISTICS */
