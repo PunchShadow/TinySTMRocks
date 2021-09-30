@@ -1200,6 +1200,10 @@ _CALLCONV void
 stm_Loop2Task(long min, long max, long stride, int ver, void* data)
 {
   TX_GET;
+#if CM == CM_COROUTINE
+  /* Coroutine function does not need to push task anymore*/
+  if (tx->is_co) return;
+#endif /* CM == CM_COROUTINE */
   for (long start = min; start < max; start += stride) {
     long end = MIN(max, (start+stride));
     ws_task* taskPtr = ws_task_create(start, end, data);

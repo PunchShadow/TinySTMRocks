@@ -89,9 +89,12 @@ ws_task_circular_array_new(unsigned long size)
 static inline void
 ws_task_circular_array_delete(ws_task_circular_array* ws_array)
 {
+    /*
     for (long i=0; i < ws_array->_size; i++) {
-        free(ws_array->_array[(int)i]);
+        free(ws_array->_array[i]);
     }
+    */
+    
     free(ws_array->_array);
     free(ws_array);
 }
