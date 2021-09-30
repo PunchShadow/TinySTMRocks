@@ -121,10 +121,6 @@ stm_wbetl_rollback(stm_tx_t *tx)
 #if CM == CM_MODULAR
   stm_word_t t;
 #endif /* CM == CM_MODULAR */
-#if CM == CM_BACKOFF
-  unsigned long wait;
-  volatile int j;
-#endif /* CM == CM_BACKOFF */
 
   PRINT_DEBUG("==> stm_wbetl_rollback(%p[%lu-%lu])\n", tx, (unsigned long)tx->start, (unsigned long)tx->end);
 

@@ -1823,6 +1823,7 @@ int_stm_task_queue_init(long numThread)
   for ( long i=0; i < numThread; i++) {
     _tinystm.task_queue_info[i] = malloc(sizeof(thread_task_queue_info));
     _tinystm.task_queue_info[i]->task_queue = NULL;
+    _tinystm.task_queue_info[i]->thread_id = -1;
   }
   _tinystm.task_queue_nb = numThread; 
   PRINT_DEBUG("==>stm_task_queue_init[tq_nb:%lu][%ld]\n", _tinystm.task_queue_nb, _tinystm.task_queue_split_index);
@@ -1864,118 +1865,58 @@ int_stm_task_queue_register(stm_tx_t *tx)
   pthread_t thread_id = pthread_self();
   long numThread = _tinystm.task_queue_nb;
   PRINT_DEBUG("==> stm_task_queue_register[tx:%p][id:%lu]\n", tx, thread_id);
-#if CM == CM_COROUTINE
-  /*
-  int finded = 0;
-  if (t->is_co == 1) {
-    for (long i=0; i < numThread; i++) {
-      if(_tinystm.task_queue_info[i]->thread_id == thread_id) {
-        t->task_queue_position = i;
-        finded = 1;
-        PRINT_DEBUG("==>stm_coro_find_task_queue[%p](%lu, [%p])\n", t, thread_id, _tinystm.task_queue_info[i]->task_queue);
-        break;
-      }
-    }
-    if (finded == 1) {return;}
-    else {PRINT_DEBUG("CO CAN'T FIND IT'S TQ[%p]\n", t);}
-  }
-  */
-#endif /* CM == CM_COROUTINE */  
+ 
   tx->task_queue_position = -1;
 
-  /* Task queues are first initialized by TaskSplit function */
-  if(_tinystm.task_queue_split_index != -1) {
-    pthread_mutex_lock(&_tinystm.taskqueue_mutex);
-    for(long i = 0; i < numThread; i++) {
-      if(_tinystm.task_queue_info[i]->task_queue != NULL) {
-        /* Task queue has tasks inside but not belows to any threads */
-        if(_tinystm.task_queue_info[i]->thread_id == -1) {
-          tx->task_queue_position = i;
-          _tinystm.task_queue_info[i]->thread_id = thread_id; // Register new thread id
-          PRINT_DEBUG("==> stm_task_queue_SPLIT_match[tx:%p][id:%lu]\n", tx, thread_id);
-          pthread_mutex_unlock(&_tinystm.taskqueue_mutex);
-          return;
-        } 
-#if CM == CM_COROUTINE
-        else if(_tinystm.task_queue_info[i]->thread_id == thread_id) {
-          /* Coroutine Match the split task queue */
-          tx->task_queue_position = i;
-          PRINT_DEBUG("==> stm_task_queue_SPLIT_match_co[tx:%p][id:%lu]\n", tx, thread_id);
-          pthread_mutex_unlock(&_tinystm.taskqueue_mutex);
-          return;
-        }
-#endif /* CM == CM_COROUTINE */
-      }
-    }
-    pthread_mutex_unlock(&_tinystm.taskqueue_mutex);
-    if(tx->task_queue_position == -1) {
-      PRINT_DEBUG("==> ERROR REGISTER[tx:%p][id:%lu]!!!\n", tx, thread_id);
-      assert(0);
-    }
-
-  }
-
-  /* Check whether the thread has already registers */
-  for (long i=0; i < numThread; i++) {
-    if (_tinystm.task_queue_info[i]->task_queue != NULL) {
-      if (_tinystm.task_queue_info[i]->thread_id == thread_id) {
-        /* Thread matches */
+  /* First, find whether there is allocated task queue with corresponding thread_id */
+  for(long i=0; i < numThread; i++) {
+    if(_tinystm.task_queue_info[i]->task_queue != NULL) {
+      if(_tinystm.task_queue_info[i]->thread_id == thread_id) {
         tx->task_queue_position = i;
-        PRINT_DEBUG("==> stm_task_queue_match[tx:%p][id:%lu]\n", tx, thread_id);
+        PRINT_DEBUG("==> stm_task_queue_match[tx:%p][id:%lu][tq:%lu]\n", tx, thread_id, tx->task_queue_posistion);
         return;
       }
     }
   }
-#if CM == CM_COROUTINE
-  if (tx->is_co == 1 && tx->task_queue_position < 0) {
-    PRINT_DEBUG("==> [tx:%p][id:%lu]NON-MAIN CO CANNOT FIND CORRESPONDING REGISTER!!!!\n", tx, thread_id);
-    return;
-  } 
-#endif /* CM == CM_COROUTINE */
-  /* Can't find the position */
-  if (tx->task_queue_position < 0 ) {
-    pthread_mutex_lock(&_tinystm.taskqueue_mutex);
-    for (long i = 0; i < numThread; i++) {
-      /* Find empty task queue position */
-      if (_tinystm.task_queue_info[i]->task_queue == NULL) {
+
+  /* Second, consider whether there is any task queue allocated but not assigned to certain thread. */
+  pthread_mutex_lock(&_tinystm.taskqueue_mutex);
+  for(long i=0; i < numThread; i++) {
+    if(_tinystm.task_queue_info[i]->task_queue != NULL) {
+      if(_tinystm.task_queue_info[i]->thread_id == -1) {
+        _tinystm.task_queue_info[i]->thread_id = thread_id;
+        tx->task_queue_position = i;
+        PRINT_DEBUG("==> stm_task_queue_register[tx:%p][id:%lu][tq:%lu]\n", tx, thread_id, tx->task_queue_position);
+        pthread_mutex_unlock(&_tinystm.taskqueue_mutex);
+        return;
+      }
+    }
+  }
+  pthread_mutex_unlock(&_tinystm.taskqueue_mutex);
+
+  /* Third, we have to find a empty index to allocate a new task queue */
+  pthread_mutex_lock(&_tinystm.taskqueue_mutex);
+  for(long i=0; i < numThread; i++) {
+    if(_tinystm.task_queue_info[i]->task_queue == NULL) {
         _tinystm.task_queue_info[i]->task_queue = mod_dp_task_queue_init();
         _tinystm.task_queue_info[i]->thread_id = thread_id;
         tx->task_queue_position = i;
-        tx->cur_task_version = 0;
+        tx->cur_task_version = 0; // Task version initialization
+        PRINT_DEBUG("==> stm_task_queue_create[tx:%p][id:%lu][tq:%lu]\n", tx, thread_id, tx->task_queue_position);
         pthread_mutex_unlock(&_tinystm.taskqueue_mutex);
-        break;
-      }
-    }
-    pthread_mutex_unlock(&_tinystm.taskqueue_mutex);
-  }
-  if (tx->task_queue_position < 0) {
-    PRINT_DEBUG("[tx:%p][id:%lu]Cannot register\n", tx, thread_id);
-    assert(0);
-  }
-  PRINT_DEBUG("==> stm_task_queue_create[tx:%p][position%lu]\n", tx, tx->task_queue_position);
-  
-  
-  /* FIXED: race condition of task queue init */
-  /*
-  for (long i=0; i < numThread; i++) {
-    PRINT_DEBUG("%lu, %p\n", i, _tinystm.task_queue_info[i]->task_queue);
-    if (_tinystm.task_queue_info[i]->task_queue == NULL) {
-      _tinystm.task_queue_info[i]->task_queue = mod_dp_task_queue_init();
-      _tinystm.task_queue_info[i]->thread_id = thread_id;
-      // Register the task queue position to transaction descriptor
-      t->task_queue_position = i;
-      t->cur_task_version = 0;
-      PRINT_DEBUG("==>stm_task_queue_register(%lu, [%p])\n", thread_id, _tinystm.task_queue_info[i]->task_queue);
-      break;
-    } else { // Second time register to find its own queue
-      if (_tinystm.task_queue_info[i]->thread_id == thread_id) {
-        t->task_queue_position = i;
-        PRINT_DEBUG("==>stm_task_queue_Reregister(%lu, [%p])\n", thread_id, _tinystm.task_queue_info[i]->task_queue);
-        break;
-      }
+        return;
     }
   }
-  */
+
+  pthread_mutex_unlock(&_tinystm.taskqueue_mutex);
+
+  /* Finally, there is an error if we cannot find or create task queue for the tx */
+  if(tx->task_queue_position == -1) {
+    PRINT_DEBUG("==> stm_task_queue_ERROR[tx:%p][id:%lu]\n", tx, thread_id);
+    exit(1);
+
+  }
+  
 }
 
 static INLINE void
@@ -2026,7 +1967,8 @@ int_stm_task_queue_enqueue(stm_tx_t *t, ws_task* ws_task, int version)
   ws_task_queue* tq = _tinystm.task_queue_info[tp]->task_queue;
   //assert(_tinystm.task_queue_info[tp]->thread_id == this_thread_id);
   ws_task_queue* tmp = _tinystm.task_queue_info[tp]->task_queue;
-  
+  assert(tp != (-1));
+
   /* Check the task version is match to the task queue version. */
   while (tq != NULL) {
     if (version == tq->taskNum) break;
@@ -2048,13 +1990,12 @@ static INLINE ws_task*
 int_stm_task_queue_dequeue(stm_tx_t *t, int version)
 {
   ws_task* task_ptr;
-  //pthread_t this_thread_id = pthread_self();
   long tp = t->task_queue_position;
   long victim_nb;
   int retry_time = 0;
   size_t num_task;
-  //assert(_tinystm.task_queue_info[tp]->thread_id == this_thread_id);
- 
+  assert(tp != (-1));
+
   ws_task_queue* tq = _tinystm.task_queue_info[tp]->task_queue;
 
   /* Check the task number. */
@@ -2380,9 +2321,10 @@ int_stm_coro_func_register(stm_tx_t *tx, void (*coro_func)(), void* coro_arg)
     PRINT_DEBUG("Co: Not need to register coro function[%p]!!!\n", tx);
     return;
   }
-  PRINT_DEBUG("==>stm_coro_func_register[%p][fp=%p][arg=%p]\n", tx, coro_func, coro_arg);
+
   tx->coro_func = coro_func;
   tx->coro_arg = coro_arg;
+  PRINT_DEBUG("==>stm_coro_func_register[id:0x%12x][%p][fp=%p][arg=%p]\n",(unsigned int)pthread_self(), tx, tx->coro_func, tx->coro_arg);
 }
 
 
@@ -2439,6 +2381,7 @@ int_is_Main_coro(stm_tx_t* tx)
 static INLINE void*
 int_stm_get_coro_arg(stm_tx_t* tx)
 {
+  PRINT_DEBUG("==> stm_get_coro_arg[id:0x%08x][tx:%p]\n", pthread_self(), tx);
   return tx->coro_arg;
 }
 
