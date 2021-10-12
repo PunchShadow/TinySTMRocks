@@ -391,6 +391,7 @@ typedef struct stm_tx {                 /* Transaction descriptor */
   int cur_task_version;                 /* Current working task version */
   JMP_BUF task_queue_start;             /* Store the start of TM_PARTITION() */
   JMP_BUF task_queue_end;               /* Store the end of TM_THREAD_EXIT() */
+  ws_task* taskPtr;                     /* Pointer to current task -> used for garbage collection */
 #endif /* WORK_STEALING */
 
 } stm_tx_t;
@@ -587,18 +588,6 @@ stm_quiesce_exit_thread(stm_tx_t *tx)
   assert(!IS_ACTIVE(tx->status));
 
   pthread_mutex_lock(&_tinystm.quiesce_mutex);
-#if defined(TM_STATISTICS) && CM == CM_COROUTINE
-  /*
-  unsigned int nb_commits = 0;
-  unsigned int nb_aborts = 0;
-  tls_get_stat(&nb_commits, &nb_aborts);
-  PRINT_DEBUG("==> stm_record: [tx:%p][nb_commits:%d][nb_aborts:%d]\n",tx, nb_commits, nb_aborts);
-  _tinystm.to_nb_commits += nb_commits;
-  _tinystm.to_nb_aborts += nb_aborts;
-  tls_set_stat(0, 0);
-  tls_set_stat(1, 0);
-  */
-#endif /* TM_STATISTICS && CM == CM_COROUTINE */
   
   /* Remove descriptor from list */
   p = NULL;
@@ -1366,6 +1355,7 @@ int_stm_init_thread(void)
   tx->timestamp = 0;
 #endif /* CM == CM_MODULAR */
 #ifdef WORK_STEALING
+  tx->taskPtr = NULL;
   int_stm_task_queue_register(tx);
 #endif /* WORK_STEALING */
 #if CM == CM_MODULAR || defined(TM_STATISTICS)
@@ -1449,6 +1439,15 @@ int_stm_exit_thread(stm_tx_t *tx)
   }
   int_stm_stat_accum(tx); // Write accum to TLS
 #endif /* TM_STATISTICS */
+
+#ifdef WORK_STEALING
+  /* Task GC */
+  if(tx->taskPtr != NULL) {
+    PRINT_DEBUG("==> stm_task_GC[tx:%p]\n", tx);
+    free(tx->taskPtr);
+    tx->taskPtr = NULL;
+  }
+#endif /* WORK_STEALING */
 
 #if CM == CM_COROUTINE
   int is_co = tls_get_co();
@@ -1819,12 +1818,14 @@ int_stm_task_queue_init(long numThread)
   
   _tinystm.task_queue_retry_time = 10; // The retry time to steal task
   _tinystm.task_queue_split_index = -1; // Initalize the split index
+  pthread_mutex_lock(&_tinystm.taskqueue_mutex);
   _tinystm.task_queue_info = malloc(sizeof(thread_task_queue_info*) * numThread );
   for ( long i=0; i < numThread; i++) {
     _tinystm.task_queue_info[i] = malloc(sizeof(thread_task_queue_info));
     _tinystm.task_queue_info[i]->task_queue = NULL;
     _tinystm.task_queue_info[i]->thread_id = -1;
   }
+  pthread_mutex_unlock(&_tinystm.taskqueue_mutex);
   _tinystm.task_queue_nb = numThread; 
   PRINT_DEBUG("==>stm_task_queue_init[tq_nb:%lu][%ld]\n", _tinystm.task_queue_nb, _tinystm.task_queue_split_index);
 }
@@ -1843,10 +1844,12 @@ int_stm_task_queue_exit()
     if (cur == NULL) continue;
     if (cur->_top - cur->_bottom != 0) {
       PRINT_DEBUG("==> stm_task_queue STILL HAVE TASK[tq:%p][top:%ld][bottom:%ld]\n", cur, cur->_top, cur->_bottom);
+      exit(1);
     }
     // Free the multiple queues in one thread.
     do {
       tmp = cur->next;
+      PRINT_DEBUG("==> stm_free_task_queue[index:%lu][tq:%p]\n", i, cur);
       ws_task_queue_delete(cur);
       cur = tmp;
     } while(tmp != NULL);
@@ -1869,15 +1872,18 @@ int_stm_task_queue_register(stm_tx_t *tx)
   tx->task_queue_position = -1;
 
   /* First, find whether there is allocated task queue with corresponding thread_id */
+  pthread_mutex_lock(&_tinystm.taskqueue_mutex);
   for(long i=0; i < numThread; i++) {
     if(_tinystm.task_queue_info[i]->task_queue != NULL) {
       if(_tinystm.task_queue_info[i]->thread_id == thread_id) {
         tx->task_queue_position = i;
-        PRINT_DEBUG("==> stm_task_queue_match[tx:%p][id:%lu][tq:%lu]\n", tx, thread_id, tx->task_queue_posistion);
+        PRINT_DEBUG("==> stm_task_queue_match[tx:%p][id:%lu][tq:%lu]\n", tx, thread_id, tx->task_queue_position);
+        pthread_mutex_unlock(&_tinystm.taskqueue_mutex);
         return;
       }
     }
   }
+  pthread_mutex_unlock(&_tinystm.taskqueue_mutex);
 
   /* Second, consider whether there is any task queue allocated but not assigned to certain thread. */
   pthread_mutex_lock(&_tinystm.taskqueue_mutex);
@@ -1926,6 +1932,7 @@ int_stm_task_queue_split(ws_task* ws_task, int version)
   /* Find the next index to push task to. */
   long index = (_tinystm.task_queue_split_index + 1) % _tinystm.task_queue_nb;
   /* First time access the task queue, so we need to initialize. */
+  pthread_mutex_lock(&_tinystm.taskqueue_mutex);
   if(_tinystm.task_queue_info[index]->task_queue == NULL) {
     _tinystm.task_queue_info[index]->task_queue = ws_task_queue_new(version);
     _tinystm.task_queue_info[index]->thread_id = -1;
@@ -1949,6 +1956,7 @@ int_stm_task_queue_split(ws_task* ws_task, int version)
     tmp->next = tq;
     PRINT_DEBUG("==> stm_task_split_new_task_queue[tq:%p]\n", tq);
   }
+  pthread_mutex_unlock(&_tinystm.taskqueue_mutex);
   ws_task_queue_push(tq, ws_task, &num_task);
 
   _tinystm.task_queue_split_index++; // Update the next split index.
@@ -2019,6 +2027,7 @@ int_stm_task_queue_dequeue(stm_tx_t *t, int version)
     do {
       // Select victim thread & take task from the thread
       /* Keep randomizing until the victim task_queue is registered. */
+      // FIXME: Race condition of _tinystm.task_queue_info[victim_nb] ???
       do {
         victim_nb = int_stm_task_queue_victim_select(t);
       } while (_tinystm.task_queue_info[victim_nb]->task_queue == NULL);
@@ -2051,6 +2060,7 @@ int_stm_task_queue_dequeue(stm_tx_t *t, int version)
   }
   // task_ptr may be NULL since reaching max retry time
   t->cur_task_version = version;
+  t->taskPtr = (ws_task*)task_ptr; // For taskPtr gc.
   return task_ptr;
 }
 
@@ -2139,10 +2149,18 @@ int_stm_task_exit(stm_tx_t* tx)
   if (is_co == 1) {
     /* Reset the coroutine argruments */
     PRINT_DEBUG("==> stm_co_task_exit[tx:%p]\n", tx);
-    tx->coro_func = NULL;
-    tx->coro_arg = NULL;
+    //tx->coro_func = NULL;
+    //tx->coro_arg = NULL;
     tx->main_co = NULL;
     tx->is_co = 1;
+    /* Task GC for coro */
+    if (tx->taskPtr != NULL) {
+      free(tx->taskPtr);
+      tx->taskPtr = NULL;
+    }
+#ifdef TM_STATISTICS
+    int_stm_stat_accum(tx); // Write accum to TLS
+#endif /* TM_STATISTICS */
     tls_switch_tx(); // Switch to main-tx
     aco_exit();
   } else {
@@ -2252,6 +2270,12 @@ int_stm_coro_exit(stm_tx_t *tx)
   /* TODO: Check whether coroutine is pending */
 
   PRINT_DEBUG("==>stm_coro_exit[%p]\n", tx);
+  /* Task GC */
+  if(tx->taskPtr != NULL) {
+    PRINT_DEBUG("==> stm_task_GC[tx:%p]\n", tx);
+    free(tx->taskPtr);
+    tx->taskPtr = NULL;
+  }
   
   for(int i = 0; i < tx->co_max; i++) {
     if (tx->co[i] != NULL) {
@@ -2381,7 +2405,8 @@ int_is_Main_coro(stm_tx_t* tx)
 static INLINE void*
 int_stm_get_coro_arg(stm_tx_t* tx)
 {
-  PRINT_DEBUG("==> stm_get_coro_arg[id:0x%08x][tx:%p]\n", pthread_self(), tx);
+  if(tx->is_co == 0) return NULL;
+  PRINT_DEBUG("==> stm_get_coro_arg[id:%lu][tx:%p]\n", pthread_self(), tx);
   return tx->coro_arg;
 }
 

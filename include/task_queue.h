@@ -78,9 +78,11 @@ ws_task_circular_array_new(unsigned long size)
     assert(ws_array);
 
     ws_array->_array = malloc(sizeof(ws_task*) * size);
+    /* Allocate overflow??????
     for (long i = 0; i < size; i++) {
         ws_array->_array[i] = NULL;
     }
+    */
     assert(ws_array->_array);
     ws_array->_size = size;
     return ws_array;
