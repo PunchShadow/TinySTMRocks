@@ -47,7 +47,7 @@ extern "C" {
 
 
 typedef struct thread_task_queue_info {
-    ws_task_queue* task_queue; /* Pointer thread own task queue */
+    hs_task_queue_t* task_queue; /* Pointer thread own task queue */
     pthread_t thread_id; /* Identify */
     //thread_task_queue_info* next;
 } thread_task_queue_info;
@@ -60,19 +60,15 @@ typedef struct thread_task_queue_info {
  * @return
  *   Pointer to the allocated ws_task_queue.
  */
-ws_task_queue* 
-mod_dp_task_queue_init(void);
+hs_task_queue_t* 
+mod_dp_task_queue_init(int version);
 //@}
 
 
-static inline void 
-mod_dp_task_queue_delete(ws_task_queue* ws_tq);
 
 
+hs_task_t* mod_dp_ws_task_create(long start, long end, void* data);
 
-ws_task* mod_dp_ws_task_create(long start, long end, void* data);
-
-void mod_dp_ws_task_delete(ws_task* task_ptr);
 
 void stm_static_partition(long min, long max, long num_thread, 
                           long* startPtr, long* stopPtr);

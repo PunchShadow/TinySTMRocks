@@ -77,9 +77,9 @@ DEFINES += -DDESIGN=WRITE_BACK_ETL
 # Pick one contention manager (CM)
 # DEFINES += -DCM=CM_SUICIDE
 # DEFINES += -DCM=CM_DELAY
-# DEFINES += -DCM=CM_BACKOFF
+DEFINES += -DCM=CM_BACKOFF
 # DEFINES += -DCM=CM_MODULAR
-DEFINES += -DCM=CM_COROUTINE
+# DEFINES += -DCM=CM_COROUTINE
 
 ########################################################################
 # Enable irrevocable mode (required for using the library with a
@@ -95,8 +95,8 @@ DEFINES += -DIRREVOCABLE_ENABLED
 # from disabling them.
 ########################################################################
 
-# DEFINES += -DTM_STATISTICS
-DEFINES += -UTM_STATISTICS
+DEFINES += -DTM_STATISTICS
+# DEFINES += -UTM_STATISTICS
 # DEFINES += -DTM_STATISTICS2
 DEFINES += -UTM_STATISTICS2
 
@@ -135,8 +135,8 @@ DEFINES += -DUSE_BLOOM_FILTER
 # enabling this feature.
 ########################################################################
 
-# DEFINES += -DEPOCH_GC
-DEFINES += -UEPOCH_GC
+DEFINES += -DEPOCH_GC
+# DEFINES += -UEPOCH_GC
 
 ########################################################################
 # Keep track of conflicts between transactions and notifies the
@@ -145,8 +145,8 @@ DEFINES += -UEPOCH_GC
 # requires EPOCH_GC.
 ########################################################################
 
-# DEFINES += -DCONFLICT_TRACKING
-DEFINES += -UCONFLICT_TRACKING
+DEFINES += -DCONFLICT_TRACKING
+# DEFINES += -UCONFLICT_TRACKING
 
 ########################################################################
 # Allow transactions to read the previous version of locked memory

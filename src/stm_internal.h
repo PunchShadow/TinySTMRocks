@@ -1837,20 +1837,16 @@ int_stm_task_queue_exit()
   PRINT_DEBUG("==>stm_task_queue_exit\n");
 
   long numThread = _tinystm.task_queue_nb;
-  ws_task_queue* tmp;
-  ws_task_queue* cur;
+  hs_task_queue_t* tmp;
+  hs_task_queue_t* cur;
   for (long i=0; i < numThread; i++) {
     cur = _tinystm.task_queue_info[i]->task_queue;
     if (cur == NULL) continue;
-    if (cur->_top - cur->_bottom != 0) {
-      PRINT_DEBUG("==> stm_task_queue STILL HAVE TASK[tq:%p][top:%ld][bottom:%ld]\n", cur, cur->_top, cur->_bottom);
-      exit(1);
-    }
     // Free the multiple queues in one thread.
     do {
       tmp = cur->next;
       PRINT_DEBUG("==> stm_free_task_queue[index:%lu][tq:%p]\n", i, cur);
-      ws_task_queue_delete(cur);
+      hs_task_queue_delete(cur);
       cur = tmp;
     } while(tmp != NULL);
     free(_tinystm.task_queue_info[i]);
@@ -1904,7 +1900,7 @@ int_stm_task_queue_register(stm_tx_t *tx)
   pthread_mutex_lock(&_tinystm.taskqueue_mutex);
   for(long i=0; i < numThread; i++) {
     if(_tinystm.task_queue_info[i]->task_queue == NULL) {
-        _tinystm.task_queue_info[i]->task_queue = mod_dp_task_queue_init();
+        _tinystm.task_queue_info[i]->task_queue = mod_dp_task_queue_init(0);
         _tinystm.task_queue_info[i]->thread_id = thread_id;
         tx->task_queue_position = i;
         tx->cur_task_version = 0; // Task version initialization
@@ -1926,21 +1922,20 @@ int_stm_task_queue_register(stm_tx_t *tx)
 }
 
 static INLINE void
-int_stm_task_queue_split(ws_task* ws_task, int version)
+int_stm_task_queue_split(hs_task_t* ws_task, int version)
 {
-  size_t num_task;
   /* Find the next index to push task to. */
   long index = (_tinystm.task_queue_split_index + 1) % _tinystm.task_queue_nb;
   /* First time access the task queue, so we need to initialize. */
   pthread_mutex_lock(&_tinystm.taskqueue_mutex);
   if(_tinystm.task_queue_info[index]->task_queue == NULL) {
-    _tinystm.task_queue_info[index]->task_queue = ws_task_queue_new(version);
+    _tinystm.task_queue_info[index]->task_queue = hs_task_queue_new(version);
     _tinystm.task_queue_info[index]->thread_id = -1;
     PRINT_DEBUG("==> stm_task_queue_split_init:[index:%lu]\n", index);
   }
   
-  ws_task_queue* tq = _tinystm.task_queue_info[index]->task_queue;
-  ws_task_queue* tmp = _tinystm.task_queue_info[index]->task_queue;
+  hs_task_queue_t* tq = _tinystm.task_queue_info[index]->task_queue;
+  hs_task_queue_t* tmp = _tinystm.task_queue_info[index]->task_queue;
   PRINT_DEBUG("==> stm_task_queue_split[tq:%p][index:%lu]\n", tq, index);
   /* Search corresponding version of task queue */
   while (tq != NULL) {
@@ -1952,12 +1947,12 @@ int_stm_task_queue_split(ws_task* ws_task, int version)
   }
   /* If there is no corresponding version, create new one. */
   if (tq == NULL) {
-    tq = ws_task_queue_new(version);
+    tq = hs_task_queue_new(version);
     tmp->next = tq;
     PRINT_DEBUG("==> stm_task_split_new_task_queue[tq:%p]\n", tq);
   }
   pthread_mutex_unlock(&_tinystm.taskqueue_mutex);
-  ws_task_queue_push(tq, ws_task, &num_task);
+  hs_task_queue_push(tq, ws_task);
 
   _tinystm.task_queue_split_index++; // Update the next split index.
   PRINT_DEBUG("==> _tinystm.task_queue_split_index:[%lu]\n", _tinystm.task_queue_split_index);
@@ -1966,15 +1961,14 @@ int_stm_task_queue_split(ws_task* ws_task, int version)
 
 
 static INLINE void
-int_stm_task_queue_enqueue(stm_tx_t *t, ws_task* ws_task, int version)
+int_stm_task_queue_enqueue(stm_tx_t *t, hs_task_t* ws_task, int version)
 {
-  size_t num_task;
   
   //pthread_t this_thread_id = pthread_self();
   long tp = t->task_queue_position;
-  ws_task_queue* tq = _tinystm.task_queue_info[tp]->task_queue;
+  hs_task_queue_t* tq = _tinystm.task_queue_info[tp]->task_queue;
   //assert(_tinystm.task_queue_info[tp]->thread_id == this_thread_id);
-  ws_task_queue* tmp = _tinystm.task_queue_info[tp]->task_queue;
+  hs_task_queue_t* tmp = _tinystm.task_queue_info[tp]->task_queue;
   assert(tp != (-1));
 
   /* Check the task version is match to the task queue version. */
@@ -1987,24 +1981,21 @@ int_stm_task_queue_enqueue(stm_tx_t *t, ws_task* ws_task, int version)
   }
   /* There is no match task queue, create a new one. */
   if (tq == NULL) {
-    tq = ws_task_queue_new(version);
+    tq = hs_task_queue_new(version);
     tmp->next = tq;
   }
-  ws_task_queue_push(tq, ws_task, &num_task);
-  PRINT_DEBUG("==> stm_task_enqueue[%p][(%lu.%d), %ld]\n",t, tp, version,  num_task);
+  hs_task_queue_push(tq, ws_task);
+  PRINT_DEBUG("==> stm_task_enqueue[%p][(%lu), %ld]\n",t, tp, version);
 }
 
-static INLINE ws_task*
+static INLINE hs_task_t*
 int_stm_task_queue_dequeue(stm_tx_t *t, int version)
 {
-  ws_task* task_ptr;
+  hs_task_t* task_ptr;
   long tp = t->task_queue_position;
-  long victim_nb;
-  int retry_time = 0;
-  size_t num_task;
   assert(tp != (-1));
 
-  ws_task_queue* tq = _tinystm.task_queue_info[tp]->task_queue;
+  hs_task_queue_t* tq = _tinystm.task_queue_info[tp]->task_queue;
 
   /* Check the task number. */
   while (tq != NULL) {
@@ -2020,47 +2011,8 @@ int_stm_task_queue_dequeue(stm_tx_t *t, int version)
   assert((tq != NULL) && "There is no such version of tasks");
 
 
-  task_ptr =  ws_task_queue_take(tq, &num_task);
-  
-  /* If task queue is empty, taking tasks from other threads */
-  if (task_ptr == NULL) {
-    do {
-      // Select victim thread & take task from the thread
-      /* Keep randomizing until the victim task_queue is registered. */
-      // FIXME: Race condition of _tinystm.task_queue_info[victim_nb] ???
-      do {
-        victim_nb = int_stm_task_queue_victim_select(t);
-      } while (_tinystm.task_queue_info[victim_nb]->task_queue == NULL);
-      /* Check if the victim task queue is empty */
-      if (ws_task_isEmpty(_tinystm.task_queue_info[victim_nb]->task_queue)) {
-        // TODO: Keep thread alive & stealing works to do.
-        retry_time ++;
-        //printf("retry_time: %d, victim: %ld\n", retry_time, victim_nb);
-        continue;
-      } else {
-        ws_task_queue* victim_tq = _tinystm.task_queue_info[victim_nb]->task_queue;
-        while (victim_tq != NULL) {
-          if (version == victim_tq->taskNum) break;
-          else {
-            victim_tq = victim_tq->next;
-          }
-        }
-        task_ptr = ws_task_queue_pop(victim_tq, &num_task);
-      }
-      
-    } while ((task_ptr == NULL) & (retry_time < _tinystm.task_queue_retry_time));
-    /* For debug functions. */
-    if (task_ptr == NULL) {
-      PRINT_DEBUG("==> stm_task_Pop_Fail[%p][(%lu.%d), %ld]\n",t, tp, version, num_task);
-    } else {
-      PRINT_DEBUG("==> stm_task_Pop_Success[%p][(%lu.%d), %ld]\n",t, tp, version, num_task);
-    }
-  } else {
-    PRINT_DEBUG("==> stm_task_Take[%p][(%lu.%d), %ld]\n",t, tp, version, num_task);
-  }
-  // task_ptr may be NULL since reaching max retry time
-  t->cur_task_version = version;
-  t->taskPtr = (ws_task*)task_ptr; // For taskPtr gc.
+  task_ptr =  hs_task_queue_pop(tq);
+  PRINT_DEBUG("==> stm_task_dequeue[%p][%p]\n", taskPtr, tq);
   return task_ptr;
 }
 
