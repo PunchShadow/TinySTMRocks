@@ -82,9 +82,9 @@ DEFINES += -DDESIGN=WRITE_BACK_ETL
 ########################################################################
 
 # Pick one contention manager (CM)
-# DEFINES += -DCM=CM_SUICIDE
+DEFINES += -DCM=CM_SUICIDE
 # DEFINES += -DCM=CM_DELAY
-DEFINES += -DCM=CM_BACKOFF
+# DEFINES += -DCM=CM_BACKOFF
 # DEFINES += -DCM=CM_MODULAR
 
 ########################################################################
@@ -158,8 +158,8 @@ DEFINES += -DCONFLICT_TRACKING
 # Record conflict to file(conflict_list.txt) while conflict is happening
 ########################################################################
 
-DEFINES += -DCONFLICT_RECORDING
-# DEFINES += -UCONFLICT_RECORDING
+# DEFINES += -DCONFLICT_RECORDING
+DEFINES += -UCONFLICT_RECORDING
 
 ########################################################################
 # Number each transaction with preprocessor (__COUNTER__) for conflict
@@ -197,8 +197,8 @@ DEFINES += -ULOCK_IDX_SWAP
 # Output many (DEBUG) or even mode (DEBUG2) debugging messages.
 ########################################################################
 
-DEFINES += -DDEBUG
-# DEFINES += -UDEBUG
+# DEFINES += -DDEBUG
+DEFINES += -UDEBUG
 # DEFINES += -DDEBUG2
 DEFINES += -UDEBUG2
 

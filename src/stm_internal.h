@@ -419,6 +419,7 @@ typedef struct {
   unsigned int to_nb_commits;
   unsigned int to_nb_aborts;
 #endif /* TM_STATISTICS */
+
   /* At least twice a cache line (256 bytes to be on the safe side) */
   char padding[CACHELINE_SIZE];
 } ALIGNED global_t;
@@ -445,6 +446,9 @@ stm_rollback(stm_tx_t *tx, unsigned int reason);
 
 static INLINE void
 int_stm_stat_addTLS(stm_tx_t* tx);
+
+static INLINE void
+int_stm_stat_accum(stm_tx_t* tx);
 
 static INLINE void
 int_stm_print_stat(void);
@@ -1351,7 +1355,7 @@ int_stm_exit_thread(stm_tx_t *tx)
       avg_aborts = (double)tx->stat_aborts / tx->stat_commits;
     printf("Thread %p | commits:%12u avg_aborts:%12.2f max_retries:%12u\n", (void *)pthread_self(), tx->stat_commits, avg_aborts, tx->stat_retries_max);
   }
-  int_stm_stat_addTLS(tx);
+  int_stm_stat_accum(tx); // Write to TLS#
 #endif /* TM_STATISTICS */
 
   stm_quiesce_exit_thread(tx);
@@ -1692,6 +1696,21 @@ int_stm_get_specific(stm_tx_t *tx, int key)
 *  type: 0 nb_commit
 *        1 nb_abort
 */
+
+static INLINE void
+int_stm_stat_accum(stm_tx_t* tx)
+{
+  unsigned int commit = 0;
+  unsigned int abort = 0;
+  int_stm_get_stats(tx, "nb_commits", &commit);
+  int_stm_get_stats(tx, "nb_aborts", &abort);
+  pthread_mutex_lock(&_tinystm.quiesce_mutex);
+  _tinystm.to_nb_commits += commit;
+  _tinystm.to_nb_aborts += abort;
+  pthread_mutex_unlock(&_tinystm.quiesce_mutex);
+  PRINT_DEBUG("==> stm_stat_accum[tx:%p][commits:%d][abort:%d]\n", tx, commit, abort);
+}
+
 static INLINE void
 int_stm_stat_addTLS(stm_tx_t* tx)
 {
@@ -1727,6 +1746,7 @@ int_stm_print_stat(void)
   printf("- Summary:\n");
   printf("          total_nb_commits: %d\n", _tinystm.to_nb_commits);
   printf("          total_nb_aborts:  %d\n", _tinystm.to_nb_aborts);
+    printf("          abort_rate:       %.6f\n", (double)_tinystm.to_nb_commits/((double)_tinystm.to_nb_commits+(double)_tinystm.to_nb_aborts));
 }
 
 #endif /* TM_STATISTICS */
