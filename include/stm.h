@@ -723,6 +723,7 @@ void stm_task_queue_register(void) _CALLCONV;
 void stm_TaskPush(void* taskPtr, int ver) _CALLCONV;
 
 
+
 /**
  * Split tasks averagely to each threads' task queues.
  * The function is called by main thread for creating
@@ -743,9 +744,12 @@ void stm_TaskSplit(void* taskPtr, int ver) _CALLCONV;
  * @param ver
  *    Task version assigned by programmer
  * @return
+ *    stm_TaskPop(): whole taskPtr
+ *    stm_TaskPopRaw(): taskPtr->data
  *    Void pointer to the object of task pushed with stm_TaskPush(ver).
 */
 void* stm_TaskPop(int ver) _CALLCONV;
+void* stm_TaskPopRaw(int ver) _CALLCONV;
 
 /**
  * Tranfer loop to separate ws_tasks with given version and verbosed data.

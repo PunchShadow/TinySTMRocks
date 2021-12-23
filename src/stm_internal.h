@@ -1818,14 +1818,15 @@ int_stm_task_queue_init(long numThread)
   
   _tinystm.task_queue_retry_time = 10; // The retry time to steal task
   _tinystm.task_queue_split_index = -1; // Initalize the split index
-  pthread_mutex_lock(&_tinystm.taskqueue_mutex);
+  // pthread_mutex_lock(&_tinystm.taskqueue_mutex);
   _tinystm.task_queue_info = malloc(sizeof(thread_task_queue_info*) * numThread );
   for ( long i=0; i < numThread; i++) {
     _tinystm.task_queue_info[i] = malloc(sizeof(thread_task_queue_info));
     _tinystm.task_queue_info[i]->task_queue = NULL;
     _tinystm.task_queue_info[i]->thread_id = -1;
+    pthread_spin_init(&(_tinystm.task_queue_info[i]->tq_spinlock), 1);
   }
-  pthread_mutex_unlock(&_tinystm.taskqueue_mutex);
+  // pthread_mutex_unlock(&_tinystm.taskqueue_mutex);
   _tinystm.task_queue_nb = numThread; 
   PRINT_DEBUG("==>stm_task_queue_init[tq_nb:%lu][%ld]\n", _tinystm.task_queue_nb, _tinystm.task_queue_split_index);
 }
@@ -1849,6 +1850,7 @@ int_stm_task_queue_exit()
       hs_task_queue_delete(cur);
       cur = tmp;
     } while(tmp != NULL);
+    pthread_spin_destroy(&(_tinystm.task_queue_info[i]->tq_spinlock));
     free(_tinystm.task_queue_info[i]);
   }
   free(_tinystm.task_queue_info);
@@ -1868,49 +1870,49 @@ int_stm_task_queue_register(stm_tx_t *tx)
   tx->task_queue_position = -1;
 
   /* First, find whether there is allocated task queue with corresponding thread_id */
-  pthread_mutex_lock(&_tinystm.taskqueue_mutex);
   for(long i=0; i < numThread; i++) {
     if(_tinystm.task_queue_info[i]->task_queue != NULL) {
       if(_tinystm.task_queue_info[i]->thread_id == thread_id) {
         tx->task_queue_position = i;
         PRINT_DEBUG("==> stm_task_queue_match[tx:%p][id:%lu][tq:%lu]\n", tx, thread_id, tx->task_queue_position);
-        pthread_mutex_unlock(&_tinystm.taskqueue_mutex);
         return;
       }
     }
   }
-  pthread_mutex_unlock(&_tinystm.taskqueue_mutex);
+
 
   /* Second, consider whether there is any task queue allocated but not assigned to certain thread. */
-  pthread_mutex_lock(&_tinystm.taskqueue_mutex);
+
   for(long i=0; i < numThread; i++) {
     if(_tinystm.task_queue_info[i]->task_queue != NULL) {
       if(_tinystm.task_queue_info[i]->thread_id == -1) {
-        _tinystm.task_queue_info[i]->thread_id = thread_id;
-        tx->task_queue_position = i;
-        PRINT_DEBUG("==> stm_task_queue_register[tx:%p][id:%lu][tq:%lu]\n", tx, thread_id, tx->task_queue_position);
-        pthread_mutex_unlock(&_tinystm.taskqueue_mutex);
-        return;
+        if(pthread_spin_trylock(&(_tinystm.task_queue_info[i]->tq_spinlock)) == 0) {
+          _tinystm.task_queue_info[i]->thread_id = thread_id;
+          tx->task_queue_position = i;
+          PRINT_DEBUG("==> stm_task_queue_register[tx:%p][id:%lu][tq:%lu]\n", tx, thread_id, tx->task_queue_position);
+          pthread_spin_unlock(&(_tinystm.task_queue_info[i]->tq_spinlock));
+          return;
+        } else { continue; }
       }
     }
   }
-  pthread_mutex_unlock(&_tinystm.taskqueue_mutex);
+
 
   /* Third, we have to find a empty index to allocate a new task queue */
-  pthread_mutex_lock(&_tinystm.taskqueue_mutex);
   for(long i=0; i < numThread; i++) {
     if(_tinystm.task_queue_info[i]->task_queue == NULL) {
-        _tinystm.task_queue_info[i]->task_queue = mod_dp_task_queue_init(0);
-        _tinystm.task_queue_info[i]->thread_id = thread_id;
-        tx->task_queue_position = i;
-        tx->cur_task_version = 0; // Task version initialization
-        PRINT_DEBUG("==> stm_task_queue_create[tx:%p][id:%lu][tq:%lu]\n", tx, thread_id, tx->task_queue_position);
-        pthread_mutex_unlock(&_tinystm.taskqueue_mutex);
-        return;
+        if(pthread_spin_trylock(&(_tinystm.task_queue_info[i]->tq_spinlock)) == 0) {
+          _tinystm.task_queue_info[i]->task_queue = mod_dp_task_queue_init(0);
+          _tinystm.task_queue_info[i]->thread_id = thread_id;
+          tx->task_queue_position = i;
+          tx->cur_task_version = 0; // Task version initialization
+          PRINT_DEBUG("==> stm_task_queue_create[tx:%p][id:%lu][tq:%lu]\n", tx, thread_id, tx->task_queue_position);
+          pthread_spin_unlock(&(_tinystm.task_queue_info[i]->tq_spinlock));
+          return;
+        } else { continue; }
     }
   }
 
-  pthread_mutex_unlock(&_tinystm.taskqueue_mutex);
 
   /* Finally, there is an error if we cannot find or create task queue for the tx */
   if(tx->task_queue_position == -1) {

@@ -1183,6 +1183,7 @@ stm_TaskPush(void* data, int ver)
   int_stm_task_queue_enqueue(tx, taskPtr, ver);
 }
 
+/* Pop the whole taskPtr */
 _CALLCONV void*
 stm_TaskPop(int ver)
 {
@@ -1194,6 +1195,17 @@ stm_TaskPop(int ver)
   return taskPtr;
 }
 
+/* Pop the data insert with TaskPop*/
+_CALLCONV void*
+stm_TaskPopRaw(int ver)
+{
+  TX_GET;
+  hs_task_t* taskPtr;
+  //PRINT_DEBUG("==> stm_TaskPop[%lu] ver: %d\n", tx->task_queue_position, ver);
+  taskPtr = int_stm_task_queue_dequeue(tx, ver);
+  if (taskPtr == NULL) return NULL;
+  return taskPtr->data;
+}
 
 /* Wrapping Loop to task with given stride */
 _CALLCONV void
