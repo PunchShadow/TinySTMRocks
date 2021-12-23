@@ -231,6 +231,12 @@ DEFINES += -DWORK_STEALING
 # DEFINES += -UWORK_STEALING
 
 ########################################################################
+# Enable conflict tracking table (ctt)
+########################################################################
+DEFINES += -DCTT
+# DEFINES += -UCTT
+
+########################################################################
 # Various default values can also be overridden:
 #
 # RW_SET_SIZE (default=4096): initial size of the read and write
