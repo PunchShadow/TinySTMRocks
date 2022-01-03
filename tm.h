@@ -448,8 +448,11 @@
                                         } \
                                         stm_task_queue_exit(); \
                                         stm_exit()
+/**/
+// #      define TM_THREAD_ENTER()         stm_init_thread()
+/* TX_NUMBERING & CT_TABLE */
+#      define TM_THREAD_ENTER(num_tx)   stm_init_thread(num_tx)
 
-#      define TM_THREAD_ENTER()         stm_init_thread()
 
 /* Jump to TM_PARTITION() and restart the task */
 #      define TM_THREAD_EXIT2()         do { \
@@ -518,11 +521,13 @@
 
 #  else /* !OTM */
 
+/* TX_NUMBERING */
 #    define TM_START(ro)                do { \
                                             stm_tx_attr_t _a = {{.read_only = ro}}; \
-                                            sigjmp_buf *_e = stm_start(_a); \
+                                            sigjmp_buf *_e = stm_start(_a, __COUNTER__); \
                                             if (_e != NULL) sigsetjmp(*_e, 0); \
                                         } while (0)
+
 #    define TM_BEGIN()                  TM_START(0)
 #    define TM_BEGIN_RO()               TM_START(1)
 #    define TM_END()                    stm_commit()

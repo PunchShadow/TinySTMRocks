@@ -38,6 +38,7 @@
 #include "mod_dp.h" /* Work-stealing */
 #include "task_queue.h" 
 #include "aco.h" /* CM_COROUTINE */
+#include "conflict_tracking_table.h" /* CTT */
 #include "mod_mem.h"
 
 //#include "aco_assert_override.h" /* CM_COROUTINE */
@@ -87,7 +88,11 @@
 # error "SIGNAL_HANDLER can only be used without EPOCH_GC"
 #endif /* defined(EPOCH_GC) && defined(SIGNAL_HANDLER) */
 
-#define TX_GET                          stm_tx_t *tx = tls_get_tx()
+#ifdef CT_TABLE
+  #define TX_GET                        stm_tx_t *tx = tls_get_tx(0)
+#else /* !CT_TABLE */
+  #define TX_GET                          stm_tx_t *tx = tls_get_tx()
+#endif /* CT_TABLE */
 
 #ifndef RW_SET_SIZE
 # define RW_SET_SIZE                    4096                /* Initial size of read/write sets */
@@ -137,6 +142,10 @@
 # define JMP_BUF                        sigjmp_buf
 # define LONGJMP(ctx, value)            siglongjmp(ctx, value)
 #endif /* !CTX_LONGJMP && !CTX_ITM */
+
+#ifdef CT_TABLE
+# define MAX_TABLE_SIZE 15 /* TODO: Auto set by the maximum transactions correspoding to application */
+#endif /* CT_TABLE */
 
 
 /* ################################################################### *
@@ -393,7 +402,10 @@ typedef struct stm_tx {                 /* Transaction descriptor */
   JMP_BUF task_queue_end;               /* Store the end of TM_THREAD_EXIT() */
   ws_task* taskPtr;                     /* Pointer to current task -> used for garbage collection */
 #endif /* WORK_STEALING */
-
+#ifdef TX_NUMBERING
+  int cur_tx_num;                       /* Identify execution transction through __COUNTER__ */
+  int max_tx;                           /* Maximum number of transactions used in this thread */
+#endif /* TX_NUMBERING */
 } stm_tx_t;
 
 /* This structure should be ordered by hot and cold variables */
@@ -445,7 +457,9 @@ typedef struct {
   unsigned int to_nb_commits;
   unsigned int to_nb_aborts;
 #endif /* TM_STATISTICS */
-
+#ifdef CT_TABLE 
+  // ctt_t** ct_table_entries;
+#endif /* CT_TABLE */
   /* At least twice a cache line (256 bytes to be on the safe side) */
   char padding[CACHELINE_SIZE];
 
@@ -1105,13 +1119,22 @@ stm_rollback(stm_tx_t *tx, unsigned int reason)
 
   /* Reset nesting level */
   tx->nesting = 1;
-
+// #ifdef CT_TABLE
+//   if (tls_get_isMain()) {
+//     if (likely(_tinystm.nb_abort_cb != 0)) {
+//       unsigned int cb;
+//       for (cb = 0; cb < _tinystm.nb_abort_cb; cb++)
+//         _tinystm.abort_cb[cb].f(_tinystm.abort_cb[cb].arg);
+//     }
+//   }
+// #else /* !CT_TABLE */
   /* Callbacks */
   if (likely(_tinystm.nb_abort_cb != 0)) {
     unsigned int cb;
     for (cb = 0; cb < _tinystm.nb_abort_cb; cb++)
       _tinystm.abort_cb[cb].f(_tinystm.abort_cb[cb].arg);
   }
+// #endif /* CT_TABLE */
 
 #if CM == CM_BACKOFF
   /* Simple RNG (good enough for backoff) */
@@ -1142,6 +1165,13 @@ stm_rollback(stm_tx_t *tx, unsigned int reason)
   /* Use coroutine contention manager */
   int_stm_coro_CM(tx);
 #endif /* CM == CM_COROUTINE */
+#if CM == CM_SHADOWTASK
+  if (tls_get_isMain()) {
+    tls_scheduler(2);
+  } else {
+    tls_scheduler(3);
+  }
+#endif /* CM == CM_SHADOWTASK */
 
 
   /* Don't prepare a new transaction if no retry. */
@@ -1276,7 +1306,11 @@ int_stm_WaW(stm_tx_t *tx, volatile stm_word_t *addr, stm_word_t value, stm_word_
 }
 
 static INLINE stm_tx_t *
+#ifdef CT_TABLE
+int_stm_init_thread(int max_tx)
+#else /* !CT_TABLE */
 int_stm_init_thread(void)
+#endif /* !CT_TABLE */
 {
   stm_tx_t *tx;
 
@@ -1299,9 +1333,12 @@ int_stm_init_thread(void)
     }
     PRINT_DEBUG("==> stm_init_thread_not_co_success[%p][%lu]\n", tx, pthread_self());
   }
-#else /* CM != CM_COROUTINE */    
-  if ((tx = tls_get_tx()) != NULL) return tx;
 #endif /* CM == CM_COROUTINE*/
+#ifdef CT_TABLE    
+  if ((tx = tls_get_tx(max_tx)) != NULL) return tx;
+#else /* !CT_TABLE */
+  if ((tx = tls_get_tx()) != NULL) return tx;
+#endif /* CT_TABLE */
 
 #ifdef EPOCH_GC
   gc_init_thread();
@@ -1376,6 +1413,9 @@ int_stm_init_thread(void)
   tx->stat_locked_reads_failed = 0;
 # endif /* READ_LOCKED_DATA */
 #endif /* TM_STATISTICS2 */
+#ifdef TX_NUMBERING
+  tx->cur_tx_num = -1; // To identify the initial state.
+#endif /* TX_NUMBERING */
 #ifdef IRREVOCABLE_ENABLED
   tx->irrevocable = 0;
 #endif /* IRREVOCABLE_ENABLED */
@@ -1384,9 +1424,16 @@ int_stm_init_thread(void)
   tls_set_tx(tx);
 #if CM == CM_COROUTINE
   if (is_co == 0) stm_quiesce_enter_thread(tx);
-#else /* CM != CM_COROUTINE */
-  stm_quiesce_enter_thread(tx);
+// #else /* CM != CM_COROUTINE */
+//   stm_quiesce_enter_thread(tx);
 #endif /* CM == CM_CORUOTINE */
+
+#ifdef CT_TABLE
+  if (tls_get_isMain()) stm_quiesce_enter_thread(tx);
+  tx->max_tx = max_tx;
+#else /* !CT_TABLE */
+  stm_quiesce_enter_thread(tx);
+#endif /* !CT_TABLE */
 
 #if CM == CM_COROUTINE
   if (is_co == 0) {
@@ -1398,14 +1445,34 @@ int_stm_init_thread(void)
   } else {
     mod_mem_coro_init(); // Init icb in coroutine TX
   }
-#else /* CM != CM_COROUTINE */
-  /* Callbacks */
+// #else /* CM != CM_COROUTINE */
+//   /* Callbacks */
+//   if (likely(_tinystm.nb_init_cb != 0)) {
+//     unsigned int cb;
+//     for (cb = 0; cb < _tinystm.nb_init_cb; cb++)
+//       _tinystm.init_cb[cb].f(_tinystm.init_cb[cb].arg);
+//   }
+#endif /* CM == CM_COROUTINE */
+
+#ifdef CT_TABLE
+  if (tls_get_isMain()) {
+    if (likely(_tinystm.nb_init_cb != 0)) {
+      unsigned int cb;
+      for (cb = 0; cb < _tinystm.nb_init_cb; cb++)
+        _tinystm.init_cb[cb].f(_tinystm.init_cb[cb].arg);
+    }  
+  } else {
+    mod_mem_coro_init(); // Init icb in coroutine TX
+  }
+#else /* !CT_TABLE */
   if (likely(_tinystm.nb_init_cb != 0)) {
     unsigned int cb;
     for (cb = 0; cb < _tinystm.nb_init_cb; cb++)
       _tinystm.init_cb[cb].f(_tinystm.init_cb[cb].arg);
-  }
-#endif /* CM == CM_COROUTINE */
+  }  
+#endif /* !CT_TABLE */
+
+
 
   return tx;
 }
@@ -1422,12 +1489,22 @@ int_stm_exit_thread(stm_tx_t *tx)
   if (tx == NULL)
     return;
 
+// #ifdef CT_TABLE
+//   if (tls_get_isMain()) {
+//     if (likely(_tinystm.nb_exit_cb != 0)) {
+//       unsigned int cb;
+//       for (cb = 0; cb < _tinystm.nb_exit_cb; cb++)
+//       _tinystm.exit_cb[cb].f(_tinystm.exit_cb[cb].arg);
+//     }
+//   }
+// #else /* !CT_TABLE */
   /* Callbacks */
   if (likely(_tinystm.nb_exit_cb != 0)) {
     unsigned int cb;
     for (cb = 0; cb < _tinystm.nb_exit_cb; cb++)
       _tinystm.exit_cb[cb].f(_tinystm.exit_cb[cb].arg);
   }
+// #endif /* CT_TABLE */
 
 #ifdef TM_STATISTICS
   /* Display statistics before to lose it */
@@ -1455,9 +1532,18 @@ int_stm_exit_thread(stm_tx_t *tx)
     int_stm_coro_exit(tx);
     stm_quiesce_exit_thread(tx);
   }
-#else /* CM != CM_COROUTINE */
-  stm_quiesce_exit_thread(tx);
+// #else /* CM != CM_COROUTINE */
+//   stm_quiesce_exit_thread(tx);
 #endif /* CM == CM_COROUTINE */
+
+#ifdef CT_TABLE
+  if (tls_get_isMain()) {
+    stm_quiesce_exit_thread(tx);
+  }
+#else /* !CT_TABLE */
+  stm_quiesce_exit_thread(tx);
+#endif /* !CT_TABLE */
+
 
 
 #ifdef EPOCH_GC
@@ -1477,10 +1563,23 @@ int_stm_exit_thread(stm_tx_t *tx)
 #if CM == CM_COROUTINE
   if (is_co == 1) int_stm_non_main_coro_exit();
 #endif /* CM == CM_COROUTINE */
+#ifdef CT_TABLE
+  if (tls_get_isMain()) {
+    tls_scheduler(0); /* Main co entering -> no more task in task queue */
+    tls_ctt_exit();
+  } else {
+    tls_scheduler(1); /* Including aco_exit() */
+  }
+#endif /* CT_TABLE */
 }
 
+
 static INLINE sigjmp_buf *
+#ifdef TX_NUMBERING
+int_stm_start(stm_tx_t *tx, stm_tx_attr_t attr, int numbering)
+#else /* !TX_NUMBERING */
 int_stm_start(stm_tx_t *tx, stm_tx_attr_t attr)
+#endif /* !TX_NUMBERING */
 {
   PRINT_DEBUG("==> stm_start(%p)\n", tx);
 
@@ -1493,17 +1592,37 @@ int_stm_start(stm_tx_t *tx, stm_tx_attr_t attr)
 
   /* Attributes */
   tx->attr = attr;
+  
+#ifdef TX_NUMBERING
+  // if (tx->cur_tx_num == -1) {tx->cur_tx_num = numbering;}
+  // else {
+  //   if (numbering > tx->cur_tx_num) tx->cur_tx_num = numbering;
+  // }
+  tx->cur_tx_num = numbering;
+  tls_set_node_state(numbering);
+  PRINT_DEBUG("TX_NUMBERING: current execution[%d]:[tx:%p]\n", tx->cur_tx_num, tx);
+#endif /* TX_NUMBERING */
 
   /* Initialize transaction descriptor */
   int_stm_prepare(tx);
   PRINT_DEBUG("--> stm_start_prepare_finished[%p]\n", tx);
+
+// #ifdef CT_TABLE
+//   if (tls_get_isMain()) {
+//     if (likely(_tinystm.nb_start_cb != 0)) {
+//       unsigned int cb;
+//       for (cb = 0; cb < _tinystm.nb_start_cb; cb++)
+//         _tinystm.start_cb[cb].f(_tinystm.start_cb[cb].arg);
+//     }    
+//   }
+// #else /* !CT_TABLE */  
   /* Callbacks */
   if (likely(_tinystm.nb_start_cb != 0)) {
     unsigned int cb;
     for (cb = 0; cb < _tinystm.nb_start_cb; cb++)
       _tinystm.start_cb[cb].f(_tinystm.start_cb[cb].arg);
   }
-
+// #endif /* CT_TABLE */
   return &tx->env;
 }
 
@@ -1520,13 +1639,22 @@ int_stm_commit(stm_tx_t *tx)
   if (unlikely(--tx->nesting > 0))
     return 1;
 
+// #ifdef CT_TABLE
+//   if (tls_get_isMain()) {
+//     if (unlikely(_tinystm.nb_precommit_cb != 0)) {
+//       unsigned int cb;
+//       for (cb = 0; cb < _tinystm.nb_precommit_cb; cb++)
+//         _tinystm.precommit_cb[cb].f(_tinystm.precommit_cb[cb].arg);
+//     }
+//   }
+// #else /* !CT_TABLE */
   /* Callbacks */
   if (unlikely(_tinystm.nb_precommit_cb != 0)) {
     unsigned int cb;
     for (cb = 0; cb < _tinystm.nb_precommit_cb; cb++)
       _tinystm.precommit_cb[cb].f(_tinystm.precommit_cb[cb].arg);
   }
-
+// #endif /* CT_TABLE */
   assert(IS_ACTIVE(tx->status));
 
 #if CM == CM_MODULAR
@@ -1593,13 +1721,22 @@ int_stm_commit(stm_tx_t *tx)
   /* Set status to COMMITTED */
   SET_STATUS(tx->status, TX_COMMITTED);
 
+// #ifdef CT_TABLE
+//   if (tls_get_isMain()) {
+//     if (likely(_tinystm.nb_commit_cb != 0)) {
+//       unsigned int cb;
+//       for (cb = 0; cb < _tinystm.nb_commit_cb; cb++)
+//         _tinystm.commit_cb[cb].f(_tinystm.commit_cb[cb].arg);
+//     } 
+//   }
+// #else /* !CT_TABLE */
   /* Callbacks */
   if (likely(_tinystm.nb_commit_cb != 0)) {
     unsigned int cb;
     for (cb = 0; cb < _tinystm.nb_commit_cb; cb++)
       _tinystm.commit_cb[cb].f(_tinystm.commit_cb[cb].arg);
   }
-
+// #endif /* CT_TABLE */
   return 1;
 }
 
@@ -1958,7 +2095,7 @@ int_stm_task_queue_split(hs_task_t* ws_task, int version)
 
   _tinystm.task_queue_split_index++; // Update the next split index.
   PRINT_DEBUG("==> _tinystm.task_queue_split_index:[%lu]\n", _tinystm.task_queue_split_index);
-  PRINT_DEBUG("==> stm_task_split[tq:%p][index:%lu][size:%d]\n",tq, index, ((int)tq->_bottom - (int)tq->_top));
+  // PRINT_DEBUG("==> stm_task_split[tq:%p][index:%lu][size:%d]\n",tq, index, ((int)tq->_bottom - (int)tq->_top));
 }
 
 
@@ -1987,7 +2124,7 @@ int_stm_task_queue_enqueue(stm_tx_t *t, hs_task_t* ws_task, int version)
     tmp->next = tq;
   }
   hs_task_queue_push(tq, ws_task);
-  PRINT_DEBUG("==> stm_task_enqueue[%p][(%lu), %ld]\n",t, tp, version);
+  // PRINT_DEBUG("==> stm_task_enqueue[%p][(%lu), %ld]\n",t, tp, version);
 }
 
 static INLINE hs_task_t*
@@ -2014,7 +2151,7 @@ int_stm_task_queue_dequeue(stm_tx_t *t, int version)
 
 
   task_ptr =  hs_task_queue_pop(tq);
-  PRINT_DEBUG("==> stm_task_dequeue[%p][%p]\n", taskPtr, tq);
+  PRINT_DEBUG("==> stm_task_dequeue[%p][%p]\n", task_ptr, tq);
   return task_ptr;
 }
 
@@ -2295,11 +2432,9 @@ int_stm_coro_func_register(stm_tx_t *tx, void (*coro_func)(), void* coro_arg)
   // If in coroutine code -> not to register again.
   assert(coro_func != NULL);
   assert(coro_arg != NULL);
-  if (tx->is_co == 1) {
-    PRINT_DEBUG("Co: Not need to register coro function[%p]!!!\n", tx);
-    return;
-  }
 
+  /* CT_TABLE version */
+  tls_co_register(coro_func, coro_arg);
   tx->coro_func = coro_func;
   tx->coro_arg = coro_arg;
   PRINT_DEBUG("==>stm_coro_func_register[id:0x%12x][%p][fp=%p][arg=%p]\n",(unsigned int)pthread_self(), tx, tx->coro_func, tx->coro_arg);
@@ -2349,12 +2484,6 @@ int_stm_coro_CM(stm_tx_t *tx)
   
 }
 
-static INLINE int
-int_is_Main_coro(stm_tx_t* tx)
-{
-  // XOR to bit change
-  return (tx->is_co ^ 1);
-}
 
 static INLINE void*
 int_stm_get_coro_arg(stm_tx_t* tx)
@@ -2364,8 +2493,40 @@ int_stm_get_coro_arg(stm_tx_t* tx)
   return tx->coro_arg;
 }
 
-
 #endif /* CM == CM_COROUTINE */
+
+#ifdef CT_TABLE
+static INLINE void
+int_stm_coro_func_register(stm_tx_t *tx, void (*coro_func)(), void* coro_arg)
+{
+  // If in coroutine code -> not to register again.
+  assert(coro_func != NULL);
+  assert(coro_arg != NULL);
+
+  if (tls_get_isMain() == 0) return; /* Coroutine cannot register the coro function and arg*/
+  /* CT_TABLE version */
+  tls_co_register(coro_func, coro_arg);
+  PRINT_DEBUG("==>stm_coro_func_register[id:0x%12x][%p][fp=%p][arg=%p]\n",(unsigned int)pthread_self(), tx, tls_get_ctt()->coro_func, tls_get_ctt()->coro_arg);
+}
+
+static INLINE int
+int_stm_is_Main_coro(stm_tx_t *tx)
+{
+  return tls_get_isMain();
+}
+
+static INLINE void*
+int_stm_get_coro_arg(stm_tx_t* tx)
+{
+  if(tls_get_isMain()) return NULL;
+  return tls_get_coro_arg();
+}
+
+
+#endif /* CT_TABLE */
+
+
+
 
 #ifdef TM_STATISTICS
 /* Record cumulative stats to TLS 
@@ -2383,6 +2544,13 @@ int_stm_stat_accum(stm_tx_t* tx)
   _tinystm.to_nb_commits += commit;
   _tinystm.to_nb_aborts += abort;
   pthread_mutex_unlock(&_tinystm.quiesce_mutex);
+#ifdef CT_TABLE
+  if (tls_get_isMain() == 0) {
+    printf("co[tx:%p] stat_accum[commits:%d][abort:%d]\n", tx, commit, abort);
+  } else {
+    printf("main co[tx:%p] stat_accum[commits:%d][abort:%d]\n", tx, commit, abort);
+  }
+#endif /* CT_TABLE */
   PRINT_DEBUG("==> stm_stat_accum[tx:%p][commits:%d][abort:%d]\n", tx, commit, abort);
 }
 

@@ -63,8 +63,14 @@
 #define CM_BACKOFF                      2
 #define CM_MODULAR                      3
 #define CM_COROUTINE                    4
+#define CM_SHADOWTASK                   5
 
 #include "utils.h"
+#ifdef CT_TABLE
+#include "aco.h"
+#include "conflict_tracking_table.h"
+#endif /* CT_TABLE */
+
 #include <stdbool.h>
 
 struct stm_tx;
@@ -110,6 +116,324 @@ tls_set_gc(long gc)
 }
 
 #elif defined(TLS_COMPILER)
+extern __thread long thread_gc;
+
+static INLINE long
+tls_get_gc(void)
+{
+  return thread_gc;
+}
+
+static INLINE void
+tls_set_gc(long gc)
+{
+  thread_gc = gc;
+}
+
+#ifdef CT_TABLE
+extern __thread ctt_t *ct_table;      /* Pointer to conflict tracking table */
+
+static INLINE void
+tls_init()
+{
+
+  ct_table = NULL;
+  thread_gc = 0;
+}
+
+static INLINE void
+tls_exit()
+{
+  //ctt_delete(ct_table);
+  thread_gc = 0;
+}
+
+static INLINE void
+tls_ctt_exit()
+{
+  ctt_delete(ct_table);
+  ct_table = NULL; /* rest ct_table to NULL */
+  thread_gc = 0; 
+}
+
+static INLINE void
+tls_set_ctt(ctt_t* table)
+{
+  ct_table = table;
+}
+
+
+/* CT_TABLE version */
+static INLINE struct stm_tx *
+tls_get_tx(int max_tx)
+{
+  /* First time entering -> create a ct_table */
+  if(ct_table == NULL) {
+    ct_table = ctt_create(max_tx);
+  }
+  /* ct_table->cur_node != NULL: Executed state calling. */
+  if(likely(ct_table->use_old)) {
+    assert(ct_table->cur_node != NULL);
+    return ct_table->cur_node->tx;
+  } else {
+    /* Main task enter at first */
+    if(ct_table->isMainCo) {
+      PRINT_DEBUG("tls_get_tx: main_co create\n");
+      /* Create main co - Should be called once !!! */
+      aco_thread_init(NULL);
+      aco_t* main_co = aco_create(NULL, NULL, 0, NULL, NULL);
+      aco_share_stack_t* sstk = aco_share_stack_new(0);
+      ct_table->sstk = sstk;
+      ctt_node_t* main_node = ctt_node_create(0, NULL, main_co);
+      ct_table->main_node = main_node;
+      ct_table->cur_node = main_node;
+      ct_table->use_old = 1;
+      return ct_table->cur_node->tx; /* NULL Poiniter */
+    } else {
+      assert(0);
+      return NULL;
+    }
+  }
+}
+
+/* CT_TABLE version 
+ * Set ct_table->cur_node->tx
+*/
+static INLINE void
+tls_set_tx(struct stm_tx *tx)
+{
+  assert(ct_table->cur_node != NULL);
+  ct_table->cur_node->tx = tx;
+}
+
+static INLINE void
+tls_co_register(void* coro_func, void* coro_arg)
+{
+  ct_table->coro_func = coro_func;
+  ct_table->coro_arg = coro_arg;
+}
+
+static INLINE int
+tls_get_isMain(void)
+{
+  return ct_table->isMainCo;
+}
+
+static INLINE ctt_t*
+tls_get_ctt(void)
+{
+  return ct_table;
+}
+
+static INLINE void
+tls_set_node_state(int numbering)
+{
+  ct_table->cur_node->state = numbering;
+}
+
+static INLINE void*
+tls_get_coro_arg(void)
+{
+  return ct_table->coro_arg;
+}
+
+/* Return 1 if contention detected, 0 otherwise */
+static INLINE int
+tls_content_detection(void)
+{
+  /* TODO:* Use Contention Intensity (CI) in Adaptive Scheduling  */
+  /* Temporally alway return false */
+  return 1;
+}
+
+/* Base one the ant colony optimization to pop the minimum conflict probability task 
+ * 
+ * @return
+ *    ctt_node_t*:  next node to execute
+ *    NULL:         ctt is empty or pop from task queue
+*/
+static INLINE ctt_node_t*
+tls_task_selector()
+{
+  /* TODO: Use Ant Colony Optimization (ACO) */
+  /* Temparolly pop the higher state number of task */
+  /* TODO: */
+  /* Checking from the largest entry to the smallest one */
+  if(ctt_console(ct_table, ct_table->size) == 0) return NULL;
+  for(int i=(ct_table->size-1); i >= 0; i--) {
+    if(ct_table->entries[i]->size == 0) continue;
+    else {
+      PRINT_DEBUG("tls_task_selector:[tx:%p][index:%d]\n", ct_table->cur_node->tx, i);
+      return ctt_request(ct_table, i);
+    }
+  }
+  /* Return NULL if the CTT is empty */
+  PRINT_DEBUG("tls_task_selector:[tx:%p][NULL]\n", ct_table->cur_node->tx);
+  return NULL;
+}
+
+/* Decide which task to execute next.
+ * If contention is detected -> proactive instantiation or switch to pending task
+ * else keep normal execution
+ * 
+ * Update CTT info to instruct next iteration.
+ * 
+ * condition types: 
+    0: main co enters TM_THREAD_EXIT()
+    1: non-main co enters TM_THREAD_EXIT()
+    2: main co enters stm_rollback()
+    3: non-main co enters stm_rollback()
+ */
+static INLINE void
+tls_scheduler(int condition)
+{
+  switch(condition) {
+    case 0:
+      PRINT_DEBUG("==> tls_scheduler[%p]: main_co THREAD_EXIT\n", ct_table->cur_node->tx);
+      ct_table->isFinish = 1;
+      /* Insert cur_node back to recycle list */
+      ct_table->cur_node->state = ct_table->size; /* Change state to recycle number */
+      ctt_insert(ct_table, ct_table->cur_node);
+      /* Keep consuming pending co task because there is no more task in task queue */
+      while(ctt_console(ct_table, ct_table->size) != 0) {
+        printf("==> tls_scheduler[table:%p]: main_co ThREAD_EXIT, ctt_console[%f]\n", ct_table, ctt_console(ct_table, ct_table->size));
+        /* resume to the select task */
+        ctt_node_t* node = tls_task_selector();
+        PRINT_DEBUG("==> tls_scheduler[%p]: resume co[state:%p]\n", ct_table->cur_node->tx, node->co);
+        ct_table->isMainCo = 0;
+        ct_table->use_old = 1;
+        ct_table->state = node->state;
+        ct_table->cur_node = node;
+
+        /* aco_resume to co*/
+        assert(node->co != NULL);
+        aco_resume(node->co);
+        /* yield back from co */
+        ct_table->isMainCo = 1;
+        ct_table->use_old = 1;
+      }
+      break;       
+    case 1:
+        /* Non-main co finished -> switch back to main co */
+        /* Insert finished co task back to recycle list */
+        PRINT_DEBUG("==> tls_scheduler[%p]: co THREAD_EXIT\n", ct_table->cur_node->tx);
+        ct_table->cur_node->state = ct_table->size; /* Change state to recycle number */
+        ct_table->cur_node->tx = NULL; /* Set descriptor to NULL to identify co is finished */
+        ctt_insert(ct_table, ct_table->cur_node);
+        /* Yield to main co */
+        ct_table->isMainCo = 1; /*FIXME: can't change the bit here */
+        ct_table->use_old = 1;
+        ct_table->state = ct_table->main_node->state;
+        ct_table->cur_node = ct_table->main_node;
+        aco_exit(); /* FIXME: Should move to the end of TM_THREAD_EXIT() Finish co task */ 
+
+      break;
+
+    case 2:
+      PRINT_DEBUG("==> tls_scheduler[%p]: main co STM_ROLLBACK\n", ct_table->cur_node->tx);
+      if(unlikely(tls_content_detection())) {
+        /* If the entry of the node's state is full. */
+        if (ct_table->entries[ct_table->cur_node->state]->size >= MAX_ENTRY_SIZE) {
+          PRINT_DEBUG("==> tls_scheduler[%p]: main co STM_ROLLBACK, CTT is full[size:%d]\n", ct_table->cur_node->tx, ct_table->entries[ct_table->cur_node->state]->size);
+          return;
+        }
+        ctt_node_t* node = tls_task_selector(); /* Select next node to execute */
+        if(node != NULL) { /* Select a pending task to execute */
+          /* Insert cur_node back to ctt */
+          if(ct_table->isMainCo == 0) ctt_insert(ct_table, ct_table->cur_node); /* FIXME: Reduce repeated main task insert */
+          /* Selecting pending tasks & update ctt info */
+          ct_table->isMainCo = 0;
+          ct_table->cur_node = node;
+          ct_table->use_old = 1;
+          ct_table->state = node->state;
+          /* aco_resume to pending task */
+          assert(ct_table->cur_node->co != NULL);
+          aco_resume(ct_table->cur_node->co);
+          /* aco_yield back to main */
+          ct_table->isMainCo = 1;
+          ct_table->use_old = 1;
+          ct_table->state = ct_table->main_node->state;
+          ct_table->cur_node = ct_table->main_node;
+          // tls_scheduler(2); /* TODO: Open after contention_detector() is finished
+          /* Call again to select next co
+             FIXME:  may happen stack overflow & REPEATED INSERT MAIN TASK */
+        } else { /* Select to proactively instantiate a new task */
+          /* Check whether the CTT entries[0] is full */
+          if (ctt_isFull(ct_table)) {
+            PRINT_DEBUG("==> tls_scheduler[%p]: proactive instantiating fails due to the overflow of CTT[size:%d]\n", ct_table->cur_node->tx, ct_table->entries[ct_table->cur_node->state]->size);
+            return; /* Proactive instantiating fails because of the CTT overflow */
+          }
+          if (ct_table->isFinish) {
+            /* stop create co since the thread task is done */
+            return;
+          }
+          PRINT_DEBUG("==> tls_scheduler[%p]: create a co\n", ct_table->cur_node->tx);
+          /* Insert cur_node back to ctt */
+          if(ct_table->isMainCo == 0) ctt_insert(ct_table, ct_table->cur_node); /* FIXME: Reduce repeated main task insert */
+          /* Proactive instantiation - pop new task from task queue */
+          ct_table->isMainCo = 0;
+          ct_table->state = 0;
+          /* Pop new task from task queue */
+          ct_table->use_old = 1;
+          /* Coroutine Initialization */
+          assert(ct_table->coro_func != NULL); /*coro_func should not be zero during coroutine initialization */
+          assert(ct_table->coro_arg != NULL);
+          aco_t* co = aco_create(ct_table->main_node->co, ct_table->sstk, 1024, ct_table->coro_func, ct_table->coro_arg);
+          ctt_node_t* co_node = ctt_node_create(0, NULL, co);
+          ct_table->cur_node = co_node;
+          /* aco_resume to new co */
+          assert(ct_table->cur_node->co != NULL);
+          aco_resume(ct_table->cur_node->co);
+          /* aco_yield back to main */
+          ct_table->isMainCo = 1;
+          ct_table->use_old = 1;
+          ct_table->state = ct_table->main_node->state;
+          ct_table->cur_node = ct_table->main_node;
+          // tls_scheduler(2); /* Recursive call - 
+          /* TODO: Open after contention_detector() is finished
+            FIXME: may happen stack overflow */
+        }
+      } else {
+        return; /* Continue exeuction - no contention */
+      }
+      break;
+
+    case 3:
+      PRINT_DEBUG("==> tls_scheduler[%p]: co STM_ROLLBACK\n", ct_table->cur_node->tx);
+      if(unlikely(tls_content_detection())) {
+        /* Can't insert back to corresponding entry . */
+        if (ct_table->entries[ct_table->cur_node->state]->size >= MAX_ENTRY_SIZE) {
+          PRINT_DEBUG("==> tls_scheduler[%p]: co STM_ROLLBACK, CTT is full[size:%d]\n", ct_table->cur_node->tx, ct_table->entries[ct_table->cur_node->state]->size);
+          return;
+        }
+        /* Insert cur_node back to ctt */
+        if(ct_table->isMainCo == 0) ctt_insert(ct_table, ct_table->cur_node);
+        /* yield back to main task */
+        /* Previously change to main task */
+        ct_table->isMainCo = 1;
+        ct_table->state = ct_table->main_node->state;
+        ct_table->use_old = 1;
+        ct_table->cur_node = ct_table->main_node;
+        aco_yield(); /* Yield back to main task */
+        ct_table->isMainCo = 0;
+        ct_table->state = ct_table->cur_node->state;
+        // if(ct_table->isFinish) { /* If main task is finished and reach stm_thread_exit() */
+        //   tls_scheduler(0);
+        // } else {
+        //   tls_scheduler(2);
+        // }
+      } else {
+        return; /* Continues execution - no contention */
+      }
+      break;
+    default:
+      assert(0);
+      break;
+  }
+}
+
+#endif /* CT_TABLE */
+
 #if CM == CM_COROUTINE
 extern __thread struct stm_tx * thread_tx;
 extern __thread long thread_gc;
@@ -205,48 +529,54 @@ tls_set_gc(long gc)
   thread_gc = gc;
 }
 
-#elif CM != CM_COROUTINE /* CM != CM_COROUTINE */
-extern __thread struct stm_tx * thread_tx;
-extern __thread long thread_gc;
+// #elif CM != CM_COROUTINE /* CM != CM_COROUTINE */
+// extern __thread struct stm_tx * thread_tx;
+// extern __thread long thread_gc;
 
-static INLINE void
-tls_init(void)
-{
-  thread_tx = NULL;
-  thread_gc = 0;
-}
+// static INLINE void
+// tls_init(void)
+// {
+//   thread_tx = NULL;
+//   thread_gc = 0;
+// }
 
-static INLINE void
-tls_exit(void)
-{
-  thread_tx = NULL;
-  thread_gc = 0;
-}
+// static INLINE void
+// tls_exit(void)
+// {
+//   thread_tx = NULL;
+//   thread_gc = 0;
+// }
 
-static INLINE struct stm_tx *
-tls_get_tx(void)
-{
-  return thread_tx;
-}
+// static INLINE struct stm_tx *
+// tls_get_tx(void)
+// {
+//   return thread_tx;
+// }
 
-static INLINE long
-tls_get_gc(void)
-{
-  return thread_gc;
-}
+// static INLINE long
+// tls_get_gc(void)
+// {
+//   return thread_gc;
+// }
 
-static INLINE void
-tls_set_tx(struct stm_tx *tx)
-{
-  thread_tx = tx;
-}
+// static INLINE void
+// tls_set_tx(struct stm_tx *tx)
+// {
+//   thread_tx = tx;
+// }
 
-static INLINE void
-tls_set_gc(long gc)
-{
-  thread_gc = gc;
-}
-#endif /* CM == CM_COROUTINE */
+// static INLINE void
+// tls_set_gc(long gc)
+// {
+//   thread_gc = gc;
+// }
+// #endif /* CM == CM_COROUTINE */
+
+
+#endif /* CT_TABLE */
+
+
+
 
 
 #elif defined(TLS_POSIX) || defined(TLS_DARWIN)

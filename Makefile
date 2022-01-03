@@ -75,11 +75,12 @@ DEFINES += -DDESIGN=WRITE_BACK_ETL
 ########################################################################
 
 # Pick one contention manager (CM)
-DEFINES += -DCM=CM_SUICIDE
+# DEFINES += -DCM=CM_SUICIDE
 # DEFINES += -DCM=CM_DELAY
 # DEFINES += -DCM=CM_BACKOFF
 # DEFINES += -DCM=CM_MODULAR
 # DEFINES += -DCM=CM_COROUTINE
+DEFINES += -DCM=CM_SHADOWTASK
 
 ########################################################################
 # Enable irrevocable mode (required for using the library with a
@@ -176,7 +177,7 @@ DEFINES += -ULOCK_IDX_SWAP
 # Output many (DEBUG) or even mode (DEBUG2) debugging messages.
 ########################################################################
 
-# DDEFINES += -DDEBUG
+# DEFINES += -DDEBUG
 DEFINES += -UDEBUG
 # DEFINES += -DDEBUG2
 DEFINES += -UDEBUG2
@@ -233,8 +234,17 @@ DEFINES += -DWORK_STEALING
 ########################################################################
 # Enable conflict tracking table (ctt)
 ########################################################################
-DEFINES += -DCTT
-# DEFINES += -UCTT
+DEFINES += -DCT_TABLE
+# DEFINES += -UCT_TABLE
+
+########################################################################
+# Number each transaction with preprocessor (__COUNTER__) for conflict
+# recording
+########################################################################
+
+DEFINES += -DTX_NUMBERING
+# DEFINES += UTX_NUMBERING
+
 
 ########################################################################
 # Various default values can also be overridden:

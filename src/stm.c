@@ -39,6 +39,7 @@
 #include "gc.h"
 #include "helper_thread.h" // Helper_thread
 #include "task_queue.h" // Work-stealing
+#include "conflict_tracking_table.h" // CT_TABLE
 
 /* ################################################################### *
  * DEFINES
@@ -56,7 +57,9 @@ static const char *cm_names[] = {
   /* 0 */ "SUICIDE",
   /* 1 */ "DELAY",
   /* 2 */ "BACKOFF",
-  /* 3 */ "MODULAR"
+  /* 3 */ "MODULAR",
+  /* 4 */ "COROUTINE",
+  /* 5 */ "SHADOWTASK"
 };
 
 /* Global variables */
@@ -130,7 +133,11 @@ __thread int is_co = 0;
 __thread unsigned int nb_commit = 0;
 __thread unsigned int nb_abort = 0;
 #endif /* CM == CM_COROUTINE */
+#ifdef CT_TABLE
+__thread ctt_t* ct_table = NULL;
+#endif /* CT_TABLE */
 #endif /* defined(TLS_COMPILER) */
+
 
 /* ################################################################### *
  * STATIC
@@ -339,9 +346,13 @@ stm_exit(void)
  * Called by the CURRENT thread to initialize thread-local STM data.
  */
 _CALLCONV stm_tx_t *
-stm_init_thread(void)
+stm_init_thread(int max_tx)
 {
+#ifdef CT_TABLE
+  return int_stm_init_thread(max_tx);
+#else /* !CT_TABLE */
   return int_stm_init_thread();
+#endif /* !CT_TABLE */
 }
 
 /*
@@ -364,16 +375,28 @@ stm_exit_thread_tx(stm_tx_t *tx)
  * Called by the CURRENT thread to start a transaction.
  */
 _CALLCONV sigjmp_buf *
-stm_start(stm_tx_attr_t attr)
+stm_start(stm_tx_attr_t attr, int numbering)
 {
   TX_GET;
+#ifdef CT_TABLE
+  return int_stm_start(tx, attr, numbering);
+#else /* !CT_TABLE */
   return int_stm_start(tx, attr);
+#endif /* CT_TABLE */
 }
 
 _CALLCONV sigjmp_buf *
+#ifdef CT_TABLE
+stm_start_tx(stm_tx_t *tx, stm_tx_attr_t attr, int numbering)
+#else /* !CT_TABLE */
 stm_start_tx(stm_tx_t *tx, stm_tx_attr_t attr)
+#endif /* CT_TABLE */
 {
+#ifdef CT_TABLE
+  return int_stm_start(tx, attr, numbering);
+#else /* !CT_TABLE */
   return int_stm_start(tx, attr);
+#endif /* CT_TABLE */
 }
 
 /*
@@ -914,7 +937,11 @@ stm_get_clock(void)
 _CALLCONV stm_tx_t *
 stm_current_tx(void)
 {
+#ifdef CT_TABLE 
+  return tls_get_tx(0);
+#else /* !CT_TABLE */
   return tls_get_tx();
+#endif /* CT_TABLE */
 }
 
 /* ################################################################### *
@@ -1218,6 +1245,9 @@ stm_Loop2Task(long min, long max, long stride, int ver, void* data)
     return;
   }
 #endif /* CM == CM_COROUTINE */
+#ifdef CT_TABLE
+  if (!tls_get_isMain()) return; /* coroutine function does not need to push tasks. */
+#endif /* CT_TABLE */
   for (long start = min; start < max; start += stride) {
     long end = MIN(max, (start+stride));
     hs_task_t* taskPtr = hs_task_create(start, end, data);
@@ -1232,6 +1262,7 @@ stm_TaskSplit(void* data, int ver)
   hs_task_t* taskPtr = hs_task_create(-1,-1,data);
   int_stm_task_queue_split(taskPtr, ver);
 }
+
 
 
 #if CM == CM_COROUTINE
@@ -1251,13 +1282,7 @@ stm_isMain_coro()
   return int_is_Main_coro(tx);
 }
 
-/* Specify coroutine function and its argrument with corresponding task version*/
-_CALLCONV void
-stm_coroutine_register(void (*func)(), void* arg)
-{
-  TX_GET;
-  int_stm_coro_func_register(tx, func, arg);
-}
+
 
 _CALLCONV void*
 stm_get_coro_arg()
@@ -1278,7 +1303,30 @@ stm_probe()
 }
 
 
-#ifdef WORK_STEALING
+#ifdef CT_TABLE
+/* Specify coroutine function and its argrument with corresponding task version*/
+_CALLCONV void
+stm_coroutine_register(void (*func)(), void* arg)
+{
+  TX_GET;
+  int_stm_coro_func_register(tx, func, arg);
+}
 
-#endif /* WORK_STEALING */
+_CALLCONV int
+stm_isMain_coro()
+{
+  TX_GET;
+  return int_stm_is_Main_coro(tx);
+}
+
+_CALLCONV void*
+stm_get_coro_arg()
+{
+  TX_GET;
+  return int_stm_get_coro_arg(tx);
+}
+
+
+
+#endif /* CT_TABLE */
 
