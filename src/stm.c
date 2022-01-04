@@ -1246,7 +1246,7 @@ stm_Loop2Task(long min, long max, long stride, int ver, void* data)
   }
 #endif /* CM == CM_COROUTINE */
 #ifdef CT_TABLE
-  if (!tls_get_isMain()) return; /* coroutine function does not need to push tasks. */
+  if (tx->max_tx != 0) if (!tls_get_isMain()) return; /* coroutine function does not need to push tasks. */
 #endif /* CT_TABLE */
   for (long start = min; start < max; start += stride) {
     long end = MIN(max, (start+stride));

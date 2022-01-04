@@ -117,6 +117,7 @@ tls_set_gc(long gc)
 
 #elif defined(TLS_COMPILER)
 extern __thread long thread_gc;
+extern __thread struct stm_tx* thread_tx;
 
 static INLINE long
 tls_get_gc(void)
@@ -138,6 +139,7 @@ tls_init()
 {
 
   ct_table = NULL;
+  thread_tx = NULL;
   thread_gc = 0;
 }
 
@@ -146,6 +148,7 @@ tls_exit()
 {
   //ctt_delete(ct_table);
   thread_gc = 0;
+  thread_tx = NULL;
 }
 
 static INLINE void
@@ -162,13 +165,16 @@ tls_set_ctt(ctt_t* table)
   ct_table = table;
 }
 
+/* FIXME: Put inline back*/
 
 /* CT_TABLE version */
-static INLINE struct stm_tx *
+static struct stm_tx *
 tls_get_tx(int max_tx)
 {
+  
   /* First time entering -> create a ct_table */
   if(ct_table == NULL) {
+    if (max_tx == 0) return thread_tx; /* Disable usage of Romeo */
     ct_table = ctt_create(max_tx);
   }
   /* ct_table->cur_node != NULL: Executed state calling. */
@@ -202,8 +208,8 @@ tls_get_tx(int max_tx)
 static INLINE void
 tls_set_tx(struct stm_tx *tx)
 {
-  assert(ct_table->cur_node != NULL);
-  ct_table->cur_node->tx = tx;
+  if (ct_table == NULL) thread_tx = tx;
+  else ct_table->cur_node->tx = tx;
 }
 
 static INLINE void
@@ -252,7 +258,7 @@ tls_content_detection(void)
  *    ctt_node_t*:  next node to execute
  *    NULL:         ctt is empty or pop from task queue
 */
-static INLINE ctt_node_t*
+static ctt_node_t*
 tls_task_selector()
 {
   /* TODO: Use Ant Colony Optimization (ACO) */
@@ -284,7 +290,7 @@ tls_task_selector()
     2: main co enters stm_rollback()
     3: non-main co enters stm_rollback()
  */
-static INLINE void
+static void
 tls_scheduler(int condition)
 {
   switch(condition) {
@@ -296,7 +302,7 @@ tls_scheduler(int condition)
       ctt_insert(ct_table, ct_table->cur_node);
       /* Keep consuming pending co task because there is no more task in task queue */
       while(ctt_console(ct_table, ct_table->size) != 0) {
-        printf("==> tls_scheduler[table:%p]: main_co ThREAD_EXIT, ctt_console[%f]\n", ct_table, ctt_console(ct_table, ct_table->size));
+        // printf("==> tls_scheduler[table:%p]: main_co ThREAD_EXIT, ctt_console[%f]\n", ct_table, ctt_console(ct_table, ct_table->size));
         /* resume to the select task */
         ctt_node_t* node = tls_task_selector();
         PRINT_DEBUG("==> tls_scheduler[%p]: resume co[state:%p]\n", ct_table->cur_node->tx, node->co);

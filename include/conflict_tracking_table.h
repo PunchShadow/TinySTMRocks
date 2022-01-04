@@ -243,7 +243,7 @@ ctt_console(ctt_t* table, int entry_num)
     for(int i=0; i < entry_num; i++) {
         res += ((table->entries[i]->size) * pow(MAX_ENTRY_SIZE, i));
     }
-    printf("==> ct_Table[%p][capacity:%f]\n", table, res);
+    // printf("==> ct_Table[%p][capacity:%f]\n", table, res);
     PRINT_DEBUG("==> CTT_capability:[%f][entries[%d]:%d]\n", res, table->size, table->entries[table->size]->size);
     return res;
 }

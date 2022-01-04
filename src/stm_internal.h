@@ -457,9 +457,7 @@ typedef struct {
   unsigned int to_nb_commits;
   unsigned int to_nb_aborts;
 #endif /* TM_STATISTICS */
-#ifdef CT_TABLE 
-  // ctt_t** ct_table_entries;
-#endif /* CT_TABLE */
+
   /* At least twice a cache line (256 bytes to be on the safe side) */
   char padding[CACHELINE_SIZE];
 
@@ -1166,10 +1164,12 @@ stm_rollback(stm_tx_t *tx, unsigned int reason)
   int_stm_coro_CM(tx);
 #endif /* CM == CM_COROUTINE */
 #if CM == CM_SHADOWTASK
-  if (tls_get_isMain()) {
-    tls_scheduler(2);
-  } else {
-    tls_scheduler(3);
+  if (tx->max_tx != 0) {
+    if (tls_get_isMain()) {
+      tls_scheduler(2);
+    } else {
+      tls_scheduler(3);
+    }
   }
 #endif /* CM == CM_SHADOWTASK */
 
@@ -1429,7 +1429,11 @@ int_stm_init_thread(void)
 #endif /* CM == CM_CORUOTINE */
 
 #ifdef CT_TABLE
-  if (tls_get_isMain()) stm_quiesce_enter_thread(tx);
+  if (max_tx != 0) {
+    if (tls_get_isMain()) stm_quiesce_enter_thread(tx);
+  } else {
+    stm_quiesce_enter_thread(tx);
+  }
   tx->max_tx = max_tx;
 #else /* !CT_TABLE */
   stm_quiesce_enter_thread(tx);
@@ -1455,14 +1459,22 @@ int_stm_init_thread(void)
 #endif /* CM == CM_COROUTINE */
 
 #ifdef CT_TABLE
-  if (tls_get_isMain()) {
-    if (likely(_tinystm.nb_init_cb != 0)) {
-      unsigned int cb;
-      for (cb = 0; cb < _tinystm.nb_init_cb; cb++)
-        _tinystm.init_cb[cb].f(_tinystm.init_cb[cb].arg);
-    }  
+  if (max_tx != 0) {
+    if (tls_get_isMain()) {
+      if (likely(_tinystm.nb_init_cb != 0)) {
+        unsigned int cb;
+        for (cb = 0; cb < _tinystm.nb_init_cb; cb++)
+          _tinystm.init_cb[cb].f(_tinystm.init_cb[cb].arg);
+      }  
+    } else {
+      mod_mem_coro_init(); // Init icb in coroutine TX
+    }
   } else {
-    mod_mem_coro_init(); // Init icb in coroutine TX
+      if (likely(_tinystm.nb_init_cb != 0)) {
+        unsigned int cb;
+        for (cb = 0; cb < _tinystm.nb_init_cb; cb++)
+          _tinystm.init_cb[cb].f(_tinystm.init_cb[cb].arg);
+      }    
   }
 #else /* !CT_TABLE */
   if (likely(_tinystm.nb_init_cb != 0)) {
@@ -1537,9 +1549,11 @@ int_stm_exit_thread(stm_tx_t *tx)
 #endif /* CM == CM_COROUTINE */
 
 #ifdef CT_TABLE
-  if (tls_get_isMain()) {
-    stm_quiesce_exit_thread(tx);
-  }
+  if (tx->max_tx != 0) {
+    if (tls_get_isMain()) {
+      stm_quiesce_exit_thread(tx);
+    }
+  } else stm_quiesce_exit_thread(tx);
 #else /* !CT_TABLE */
   stm_quiesce_exit_thread(tx);
 #endif /* !CT_TABLE */
@@ -1564,11 +1578,13 @@ int_stm_exit_thread(stm_tx_t *tx)
   if (is_co == 1) int_stm_non_main_coro_exit();
 #endif /* CM == CM_COROUTINE */
 #ifdef CT_TABLE
-  if (tls_get_isMain()) {
-    tls_scheduler(0); /* Main co entering -> no more task in task queue */
-    tls_ctt_exit();
-  } else {
-    tls_scheduler(1); /* Including aco_exit() */
+  if (tx->max_tx != 0) {
+    if (tls_get_isMain()) {
+      tls_scheduler(0); /* Main co entering -> no more task in task queue */
+      tls_ctt_exit();
+    } else {
+      tls_scheduler(1); /* Including aco_exit() */
+    }
   }
 #endif /* CT_TABLE */
 }
@@ -1599,7 +1615,7 @@ int_stm_start(stm_tx_t *tx, stm_tx_attr_t attr)
   //   if (numbering > tx->cur_tx_num) tx->cur_tx_num = numbering;
   // }
   tx->cur_tx_num = numbering;
-  tls_set_node_state(numbering);
+  if (tx->max_tx != 0) tls_set_node_state(numbering);
   PRINT_DEBUG("TX_NUMBERING: current execution[%d]:[tx:%p]\n", tx->cur_tx_num, tx);
 #endif /* TX_NUMBERING */
 
@@ -2545,11 +2561,11 @@ int_stm_stat_accum(stm_tx_t* tx)
   _tinystm.to_nb_aborts += abort;
   pthread_mutex_unlock(&_tinystm.quiesce_mutex);
 #ifdef CT_TABLE
-  if (tls_get_isMain() == 0) {
-    printf("co[tx:%p] stat_accum[commits:%d][abort:%d]\n", tx, commit, abort);
-  } else {
-    printf("main co[tx:%p] stat_accum[commits:%d][abort:%d]\n", tx, commit, abort);
-  }
+  // if (tls_get_isMain() == 0) {
+  //   printf("co[tx:%p] stat_accum[commits:%d][abort:%d]\n", tx, commit, abort);
+  // } else {
+  //   printf("main co[tx:%p] stat_accum[commits:%d][abort:%d]\n", tx, commit, abort);
+  // }
 #endif /* CT_TABLE */
   PRINT_DEBUG("==> stm_stat_accum[tx:%p][commits:%d][abort:%d]\n", tx, commit, abort);
 }
