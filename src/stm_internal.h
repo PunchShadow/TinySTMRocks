@@ -147,6 +147,10 @@
 # define MAX_TABLE_SIZE 15 /* TODO: Auto set by the maximum transactions correspoding to application */
 #endif /* CT_TABLE */
 
+#ifdef CONTENTION_INTENSITY
+# define ci_alpha 0.5     /* TODO: hyper-parameter of alpha */
+#endif /* CONTENTION_INTENSITY */
+
 
 /* ################################################################### *
  * TYPES
@@ -406,6 +410,10 @@ typedef struct stm_tx {                 /* Transaction descriptor */
   int cur_tx_num;                       /* Identify execution transction through __COUNTER__ */
   int max_tx;                           /* Maximum number of transactions used in this thread */
 #endif /* TX_NUMBERING */
+#ifdef CONTENTION_INTENSITY
+  float ci;                             /* Calculate contention intensity */
+  float alpha;                          /* The alpha to calculate CI from [0~1] */
+#endif /* CONTENTION_INTENSITY */
 } stm_tx_t;
 
 /* This structure should be ordered by hot and cold variables */
@@ -516,6 +524,17 @@ int_stm_print_stat(void);
 
 static INLINE void
 int_stm_stat_accum(stm_tx_t* tx);
+
+#ifdef CONTENTION_INTENSITY
+static INLINE void
+int_stm_ci_init(stm_tx_t* tx, float alpha);
+
+static INLINE void
+int_stm_ci_commit(stm_tx_t* tx);
+
+static INLINE void
+int_stm_ci_abort(stm_tx_t* tx);
+#endif /* CONTENTION_INTENSITY */
 
 /* ################################################################### *
  * INLINE FUNCTIONS
@@ -1106,6 +1125,9 @@ stm_rollback(stm_tx_t *tx, unsigned int reason)
 #ifdef RTM_PROFILING
   PROF_ABORT();
 #endif /* RTM_PROFILING */
+#ifdef CONTENTION_INTENSITY
+  int_stm_ci_abort(tx);
+#endif /* CONTENTION_INTENSITY */
 
   /* Set status to ABORTED */
   SET_STATUS(tx->status, TX_ABORTED);
@@ -1166,9 +1188,9 @@ stm_rollback(stm_tx_t *tx, unsigned int reason)
 #if CM == CM_SHADOWTASK
   if (tx->max_tx != 0) {
     if (tls_get_isMain()) {
-      tls_scheduler(2);
+      tls_scheduler(2, tx->ci);
     } else {
-      tls_scheduler(3);
+      tls_scheduler(3, tx->ci);
     }
   }
 #endif /* CM == CM_SHADOWTASK */
@@ -1439,6 +1461,10 @@ int_stm_init_thread(void)
   stm_quiesce_enter_thread(tx);
 #endif /* !CT_TABLE */
 
+#ifdef CONTENTION_INTENSITY
+  int_stm_ci_init(tx, ci_alpha);
+#endif /* CONTENTION_INTENSITY */
+
 #if CM == CM_COROUTINE
   if (is_co == 0) {
     if (likely(_tinystm.nb_init_cb != 0)) {
@@ -1580,10 +1606,10 @@ int_stm_exit_thread(stm_tx_t *tx)
 #ifdef CT_TABLE
   if (tx->max_tx != 0) {
     if (tls_get_isMain()) {
-      tls_scheduler(0); /* Main co entering -> no more task in task queue */
+      tls_scheduler(0, 0); /* Main co entering -> no more task in task queue */
       tls_ctt_exit();
     } else {
-      tls_scheduler(1); /* Including aco_exit() */
+      tls_scheduler(1, 0); /* Including aco_exit() */
     }
   }
 #endif /* CT_TABLE */
@@ -1715,6 +1741,9 @@ int_stm_commit(stm_tx_t *tx)
 #ifdef RTM_PROFILING
   PROF_COMMIT();
 #endif /* RTM_PROFILING*/
+#ifdef CONTENTION_INTENSITY
+  int_stm_ci_commit(tx);
+#endif /* CONTENTION INTENSITY */
 
 #if CM == CM_BACKOFF
   /* Reset backoff */
@@ -2614,10 +2643,33 @@ int_stm_print_stat(void)
 
 
 
-#ifdef WORK_STEALING
+#ifdef CONTENTION_INTENSITY
+static INLINE void
+int_stm_ci_init(stm_tx_t* tx, float alpha)
+{
+  assert((alpha > 0) && (alpha < 1));
+  tx->alpha = alpha;
+  tx->ci = 0;
+}
+
+static INLINE void
+int_stm_ci_commit(stm_tx_t* tx)
+{
+  float res = (tx->ci)*(tx->alpha) + (1-tx->alpha);
+  tx->ci = res;
+}
+
+static INLINE void
+int_stm_ci_abort(stm_tx_t* tx)
+{
+  float res = (tx->ci)*(tx->alpha);
+  tx->ci = res;
+}
+#endif /* CONTENTION_INTENSITY */
 
 
-#endif /* WORK_STEALING */
+
+
 
 
 

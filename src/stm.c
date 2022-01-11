@@ -298,7 +298,6 @@ stm_init(void)
 
   tls_init();
 
-
 #ifdef SIGNAL_HANDLER
   if (getenv(NO_SIGNAL_HANDLER) == NULL) {
     /* Catch signals for non-faulting load */

@@ -238,6 +238,13 @@ DEFINES += -DCT_TABLE
 # DEFINES += -UCT_TABLE
 
 ########################################################################
+# Contention Intensity 
+########################################################################
+
+DEFINES += -DCONTENTION_INTENSITY
+# DEFINES += -UCONTENTION_INTENSITY
+
+########################################################################
 # Number each transaction with preprocessor (__COUNTER__) for conflict
 # recording
 ########################################################################

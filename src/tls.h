@@ -65,6 +65,8 @@
 #define CM_COROUTINE                    4
 #define CM_SHADOWTASK                   5
 
+#define CI_THRESHOLD                    0.85 /* FIXME: Find a proper */
+
 #include "utils.h"
 #ifdef CT_TABLE
 #include "aco.h"
@@ -245,11 +247,14 @@ tls_get_coro_arg(void)
 
 /* Return 1 if contention detected, 0 otherwise */
 static INLINE int
-tls_content_detection(void)
+tls_content_detection(float tx_ci)
 {
-  /* TODO:* Use Contention Intensity (CI) in Adaptive Scheduling  */
+  /* Use Contention Intensity (CI) in Adaptive Scheduling  */
   /* Temporally alway return false */
-  return 1;
+  assert(ct_table->cur_node != NULL);
+  if (tx_ci >= CI_THRESHOLD) {
+    return 1;
+  } else {return 0;} 
 }
 
 /* Base one the ant colony optimization to pop the minimum conflict probability task 
@@ -291,7 +296,7 @@ tls_task_selector()
     3: non-main co enters stm_rollback()
  */
 static void
-tls_scheduler(int condition)
+tls_scheduler(int condition, float ci)
 {
   switch(condition) {
     case 0:
@@ -337,7 +342,7 @@ tls_scheduler(int condition)
 
     case 2:
       PRINT_DEBUG("==> tls_scheduler[%p]: main co STM_ROLLBACK\n", ct_table->cur_node->tx);
-      if(unlikely(tls_content_detection())) {
+      if(unlikely(tls_content_detection(ci))) {
         /* If the entry of the node's state is full. */
         if (ct_table->entries[ct_table->cur_node->state]->size >= MAX_ENTRY_SIZE) {
           PRINT_DEBUG("==> tls_scheduler[%p]: main co STM_ROLLBACK, CTT is full[size:%d]\n", ct_table->cur_node->tx, ct_table->entries[ct_table->cur_node->state]->size);
@@ -406,7 +411,7 @@ tls_scheduler(int condition)
 
     case 3:
       PRINT_DEBUG("==> tls_scheduler[%p]: co STM_ROLLBACK\n", ct_table->cur_node->tx);
-      if(unlikely(tls_content_detection())) {
+      if(unlikely(tls_content_detection(ci))) {
         /* Can't insert back to corresponding entry . */
         if (ct_table->entries[ct_table->cur_node->state]->size >= MAX_ENTRY_SIZE) {
           PRINT_DEBUG("==> tls_scheduler[%p]: co STM_ROLLBACK, CTT is full[size:%d]\n", ct_table->cur_node->tx, ct_table->entries[ct_table->cur_node->state]->size);
