@@ -71,6 +71,7 @@
 #ifdef CT_TABLE
 #include "aco.h"
 #include "conflict_tracking_table.h"
+#include "conflict_probability_table.h"
 #endif /* CT_TABLE */
 
 #include <stdbool.h>
@@ -167,7 +168,9 @@ tls_set_ctt(ctt_t* table)
   ct_table = table;
 }
 
-/* FIXME: Put inline back*/
+/* FIXME: tls_get_tx overhead is too enormous 
+    * Decouple tls_get_tx() and ct_table init
+*/
 
 /* CT_TABLE version */
 static struct stm_tx *
