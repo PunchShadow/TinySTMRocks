@@ -65,7 +65,7 @@
 #define CM_COROUTINE                    4
 #define CM_SHADOWTASK                   5
 
-#define CI_THRESHOLD                    0.85 /* FIXME: Find a proper */
+#define CI_THRESHOLD                    0.95 /* FIXME: Find a proper */
 
 #include "utils.h"
 #ifdef CT_TABLE
@@ -121,6 +121,13 @@ tls_set_gc(long gc)
 #elif defined(TLS_COMPILER)
 extern __thread long thread_gc;
 extern __thread struct stm_tx* thread_tx;
+extern __thread int romeo_init; /* Specify whether all other statisitc information is init */
+
+static INLINE int
+tls_get_init_done()
+{
+  return romeo_init;
+}
 
 static INLINE long
 tls_get_gc(void)
@@ -136,11 +143,145 @@ tls_set_gc(long gc)
 
 #ifdef CT_TABLE
 extern __thread ctt_t *ct_table;      /* Pointer to conflict tracking table */
+extern __thread int romeo_init;
+# ifdef CPT
+extern __thread cpt_node_t** cp_table;
+extern __thread int cpt_size;
+extern __thread int nb_commits;
+extern __thread int nb_aborts;
+extern __thread float cpt_evap;
+# endif /* CPT */
+# ifdef CONTENTION_INTENSITY
+extern __thread float tls_ci;
+extern __thread float tls_alpha;
+# endif /* CONTENTION_INTENSITY */ 
+
+static INLINE void
+tls_on_commit()
+{
+#ifdef CPT
+  nb_commits++;
+  cpt_evaporate(cp_table, cpt_size, cpt_evap);
+#endif /* CPT */
+#ifdef CONTENTION_INTENSITY
+  tls_ci = (tls_ci)*(tls_alpha) + (1-tls_alpha);
+#endif /* CONTNETION_INTENSITY */
+}
+
+static INLINE void
+tls_on_abort()
+{
+#ifdef CPT
+  nb_aborts++;
+  cpt_evaporate(cp_table, cpt_size, cpt_evap);
+#endif /* CPT */
+#ifdef CONTENTION_INTENSITY
+  tls_ci = (tls_ci)*(tls_alpha);
+#endif /* CONTNETION_INTENSITY */
+}
+
+
+# ifdef CPT
+static INLINE cpt_node_t**
+tls_get_cpt()
+{
+  return cp_table;
+}
+
+static INLINE void
+tls_set_cpt(cpt_node_t** cpt)
+{
+  cp_table = cpt;
+}
+
+static INLINE void
+tls_set_evaporating_rate(float evap)
+{
+  cpt_evap = evap;
+}
+
+static INLINE int
+tls_get_Nk()
+{
+  return (nb_commits + nb_aborts);
+}
+
+static INLINE void
+tls_cpt_laying(int tx1, int tx2)
+{
+  // FIXME: Determine Q and Lk's values.
+  /* laying and evaporate -> laying quantity should times 1/evaporating ratio */
+  // printf("tls_cpt_laying[%lu]: (%d, %d)\n", pthread_self(), tx1, tx2);
+  cpt_laying(cp_table, cpt_size, tx1, tx2, (10/tls_alpha), 1);
+}
+# endif /* CPT */
+
+/* one-time init data structure */
+static INLINE void
+tls_one_time_init(int max_tx, float alpha)
+{
+  if(romeo_init) return;
+#ifdef CT_TABLE
+  ct_table = ctt_create(max_tx); /* create ctt no matter max_tx is 0 or not */
+    
+  /* Create main co */
+  /* Main task enter at first */
+  PRINT_DEBUG("tls_one_time_init: main_co create\n");
+  /* Create main co - Should be called once !!! */
+  aco_thread_init(NULL);
+  aco_t* main_co = aco_create(NULL, NULL, 0, NULL, NULL);
+  aco_share_stack_t* sstk = aco_share_stack_new(0);
+  ct_table->sstk = sstk;
+  ctt_node_t* main_node = ctt_node_create(0, NULL, main_co);
+  ct_table->main_node = main_node;
+  ct_table->cur_node = main_node;
+  ct_table->use_old = 1;
+
+#endif /* CT_TABLE */
+#ifdef CPT
+  cp_table = cpt_create(max_tx);
+  cpt_size = max_tx;
+  nb_commits = 0;
+  nb_aborts = 0;
+  tls_set_evaporating_rate(0.95); /* FIXME: evaportating rate */
+#endif /* CPT */
+#ifdef CONTENTION_INTENSITY
+  tls_ci = 0;
+  tls_alpha = alpha;
+#endif /* CONTENTION_INTENSITY */
+  thread_tx = NULL;
+  romeo_init = 1;
+}
+
+static INLINE void
+tls_one_time_exit(int max_tx)
+{
+  if(romeo_init == 0) return; 
+#ifdef CT_TABLE
+  ctt_delete(ct_table);
+  ct_table = NULL;
+  cpt_size = 0;
+#endif /* CT_TABLE */
+#ifdef CPT
+  cpt_delete(cp_table, max_tx);
+  cp_table = NULL;
+  cpt_size = 0;
+  nb_commits = 0;
+  nb_aborts = 0;
+  cpt_evap = 0;
+#endif /* CPT */
+#ifdef CONTENTION_INTENSITY
+  tls_ci = 0;
+  tls_alpha = 0;
+#endif /* CONTENTION_INTENSITY */
+  thread_tx = NULL;
+  romeo_init = 0;
+}
+
 
 static INLINE void
 tls_init()
 {
-
   ct_table = NULL;
   thread_tx = NULL;
   thread_gc = 0;
@@ -149,62 +290,31 @@ tls_init()
 static INLINE void
 tls_exit()
 {
-  //ctt_delete(ct_table);
+#ifdef CT_TABLE
+  ct_table = NULL;
+  cpt_size = 0;
+#endif /* CT_TABLE */
+#ifdef CPT
+  cp_table = NULL;
+  cpt_size = 0;
+  nb_commits = 0;
+  nb_aborts = 0;
+#endif /* CPT */
+#ifdef CONTENTION_INTENSITY
+  tls_ci = 0;
+  tls_alpha = 0;
+#endif /* CONTENTION_INTENSITY */
   thread_gc = 0;
   thread_tx = NULL;
 }
 
-static INLINE void
-tls_ctt_exit()
-{
-  ctt_delete(ct_table);
-  ct_table = NULL; /* rest ct_table to NULL */
-  thread_gc = 0; 
-}
 
-static INLINE void
-tls_set_ctt(ctt_t* table)
-{
-  ct_table = table;
-}
-
-/* FIXME: tls_get_tx overhead is too enormous 
-    * Decouple tls_get_tx() and ct_table init
-*/
 
 /* CT_TABLE version */
 static struct stm_tx *
 tls_get_tx(int max_tx)
 {
-  
-  /* First time entering -> create a ct_table */
-  if(ct_table == NULL) {
-    if (max_tx == 0) return thread_tx; /* Disable usage of Romeo */
-    ct_table = ctt_create(max_tx);
-  }
-  /* ct_table->cur_node != NULL: Executed state calling. */
-  if(likely(ct_table->use_old)) {
-    assert(ct_table->cur_node != NULL);
-    return ct_table->cur_node->tx;
-  } else {
-    /* Main task enter at first */
-    if(ct_table->isMainCo) {
-      PRINT_DEBUG("tls_get_tx: main_co create\n");
-      /* Create main co - Should be called once !!! */
-      aco_thread_init(NULL);
-      aco_t* main_co = aco_create(NULL, NULL, 0, NULL, NULL);
-      aco_share_stack_t* sstk = aco_share_stack_new(0);
-      ct_table->sstk = sstk;
-      ctt_node_t* main_node = ctt_node_create(0, NULL, main_co);
-      ct_table->main_node = main_node;
-      ct_table->cur_node = main_node;
-      ct_table->use_old = 1;
-      return ct_table->cur_node->tx; /* NULL Poiniter */
-    } else {
-      assert(0);
-      return NULL;
-    }
-  }
+  return ct_table->cur_node->tx; /* For size= = or != 0*/
 }
 
 /* CT_TABLE version 
@@ -213,8 +323,7 @@ tls_get_tx(int max_tx)
 static INLINE void
 tls_set_tx(struct stm_tx *tx)
 {
-  if (ct_table == NULL) thread_tx = tx;
-  else ct_table->cur_node->tx = tx;
+  ct_table->cur_node->tx = tx;  /* For size == 0 or != 0 */
 }
 
 static INLINE void
@@ -255,6 +364,7 @@ tls_content_detection(float tx_ci)
   /* Use Contention Intensity (CI) in Adaptive Scheduling  */
   /* Temporally alway return false */
   assert(ct_table->cur_node != NULL);
+  // printf("Current ci: %f\n", tx_ci);
   if (tx_ci >= CI_THRESHOLD) {
     return 1;
   } else {return 0;} 
@@ -274,16 +384,21 @@ tls_task_selector()
   /* TODO: */
   /* Checking from the largest entry to the smallest one */
   if(ctt_console(ct_table, ct_table->size) == 0) return NULL;
-  for(int i=(ct_table->size-1); i >= 0; i--) {
-    if(ct_table->entries[i]->size == 0) continue;
-    else {
-      PRINT_DEBUG("tls_task_selector:[tx:%p][index:%d]\n", ct_table->cur_node->tx, i);
-      return ctt_request(ct_table, i);
-    }
-  }
+  /* ACO prediction */
+  int candidate = cpt_predict(cp_table, cpt_size, ct_table->state, ct_table);
+  
+  
+  // for(int i=(ct_table->size-1); i >= 0; i--) {
+  //   if(ct_table->entries[i]->size == 0) continue;
+  //   else {
+  //     PRINT_DEBUG("tls_task_selector:[tx:%p][index:%d]\n", ct_table->cur_node->tx, i);
+  //     return ctt_request(ct_table, i);
+  //   }
+  // }
+
   /* Return NULL if the CTT is empty */
-  PRINT_DEBUG("tls_task_selector:[tx:%p][NULL]\n", ct_table->cur_node->tx);
-  return NULL;
+  // printf("tls_task_selector:[tx:%p][%d]\n", ct_table->cur_node->tx, candidate);
+  return ctt_request(ct_table, candidate);
 }
 
 /* Decide which task to execute next.
@@ -299,7 +414,7 @@ tls_task_selector()
     3: non-main co enters stm_rollback()
  */
 static void
-tls_scheduler(int condition, float ci)
+tls_scheduler(int condition)
 {
   switch(condition) {
     case 0:
@@ -313,6 +428,7 @@ tls_scheduler(int condition, float ci)
         // printf("==> tls_scheduler[table:%p]: main_co ThREAD_EXIT, ctt_console[%f]\n", ct_table, ctt_console(ct_table, ct_table->size));
         /* resume to the select task */
         ctt_node_t* node = tls_task_selector();
+        if (node == NULL) break;
         PRINT_DEBUG("==> tls_scheduler[%p]: resume co[state:%p]\n", ct_table->cur_node->tx, node->co);
         ct_table->isMainCo = 0;
         ct_table->use_old = 1;
@@ -345,7 +461,7 @@ tls_scheduler(int condition, float ci)
 
     case 2:
       PRINT_DEBUG("==> tls_scheduler[%p]: main co STM_ROLLBACK\n", ct_table->cur_node->tx);
-      if(unlikely(tls_content_detection(ci))) {
+      if(unlikely(tls_content_detection(tls_ci))) {
         /* If the entry of the node's state is full. */
         if (ct_table->entries[ct_table->cur_node->state]->size >= MAX_ENTRY_SIZE) {
           PRINT_DEBUG("==> tls_scheduler[%p]: main co STM_ROLLBACK, CTT is full[size:%d]\n", ct_table->cur_node->tx, ct_table->entries[ct_table->cur_node->state]->size);
@@ -414,7 +530,7 @@ tls_scheduler(int condition, float ci)
 
     case 3:
       PRINT_DEBUG("==> tls_scheduler[%p]: co STM_ROLLBACK\n", ct_table->cur_node->tx);
-      if(unlikely(tls_content_detection(ci))) {
+      if(unlikely(tls_content_detection(tls_ci))) {
         /* Can't insert back to corresponding entry . */
         if (ct_table->entries[ct_table->cur_node->state]->size >= MAX_ENTRY_SIZE) {
           PRINT_DEBUG("==> tls_scheduler[%p]: co STM_ROLLBACK, CTT is full[size:%d]\n", ct_table->cur_node->tx, ct_table->entries[ct_table->cur_node->state]->size);

@@ -9,7 +9,8 @@ extern "C" {
 #include <stdlib.h>
 #include <pthread.h>
 #include <time.h>
-#include "conflict_tracking_table.h"
+#include <assert.h>
+// #include "conflict_tracking_table.h"
 
 #define QUANTITY               1
 
@@ -27,11 +28,17 @@ typedef struct gcp_table {
     int Nt;                     /* Total transaction executing number: commit + abort*/
 } gcpt_t;
 
+typedef struct cpt {
+    cpt_node_t** _array;
+    int Nk;
+} cpt_t;
+
 
 /* create a size*size array */
 static inline cpt_node_t**
 cpt_create(int size)
 {
+    if (size == 0) return NULL;
     cpt_node_t** table;
     table = (cpt_node_t**)malloc(size * sizeof(cpt_node_t*));
     for (int i=0; i < size; i++) {
@@ -43,10 +50,9 @@ cpt_create(int size)
 static inline void
 cpt_delete(cpt_node_t** table, int size)
 {
+    if (size == 0) return;
     for (int i=0; i < size; i++) {
-        for (int j=0; j < size; j++) {
-            free(table[i][j]);
-        }
+        free(table[i]);
     }
     free(table);
 }
@@ -56,11 +62,12 @@ cpt_init(cpt_node_t** table, int size)
 {
     for (int i=0; i < size; i++) {
         for (int j=0; j < size; j++) {
-            if (i <= j) table[i][j].cp = -1;
+            if (i > j) table[i][j].cp = -1;
             else table[i][j].cp = 0;
         }
     }
 }
+
 
 /* Global CPT init */
 static inline gcpt_t*
@@ -78,7 +85,7 @@ gcpt_init(int size)
 static inline void
 gcpt_delete(gcpt_t* gcpt, int size)
 {
-    cpt_delete(gcpt->_array);
+    cpt_delete(gcpt->_array, size);
     pthread_spin_destroy(&(gcpt->lock));
     free(gcpt);
 }
@@ -100,12 +107,13 @@ cpt_evaporate(cpt_node_t** table, int size, float evap)
 
 /* Laying the pheromone on conflict pair (x, y) */
 static inline void
-cpt_laying(cpt_node_t** table, int x, int y, int L_k)
+cpt_laying(cpt_node_t** table, int size, int x, int y,float q, float L_k)
 {
+    //assert(x < size && y < size);
     if(x <= y) {
-        table[x][y].cp += QUANTITY / L_k;
+        table[x][y].cp += q / L_k;
     } else {
-        table[y][x].cp += QUANTITY / L_k;
+        table[y][x].cp += q / L_k;
     }
 }
 
@@ -168,7 +176,6 @@ gcpt_pull(gcpt_t* gcpt, cpt_node_t** lcpt, int size, int Nk, int retry)
         pthread_spin_unlock(&(gcpt->lock));
         return 0;
     }
-    int Nsum = Nt + Nk;
     for (int i=0; i < size; i++) {
         for (int j=i; j < size; j++) {
             lcpt[i][j].cp = gcpt->_array[i][j].cp;
@@ -193,7 +200,7 @@ static inline int
 cpt_predict(cpt_node_t** table, int size, int i, ctt_t* ptt)
 {  
     float sum = 0;
-    int max_state; /*Maximum non-empty entry */
+    
     srand(time(NULL));
     /* Caculate */
     for (int j=0; j < size; j++) {
@@ -201,7 +208,6 @@ cpt_predict(cpt_node_t** table, int size, int i, ctt_t* ptt)
         if (ptt->entries[j]->size != 0) {
             if (i <= j) sum += table[i][j].cp;
             else sum += table[j][i].cp;
-            max_state = j;
         }
     }
 
@@ -211,14 +217,14 @@ cpt_predict(cpt_node_t** table, int size, int i, ctt_t* ptt)
     /* Find the random number is in which ranges [0, sum)*/
     for (int j=0; j < size; j++) {
         if (ptt->entries[j]->size != 0) {
-            if (i <= j) accum += table[i][j].cp;
-            else accum += table[j][i].cp;
+            if (i <= j) {accum += table[i][j].cp;}
+            else {accum += table[j][i].cp;}
             
-            if(x < accum) return j;
+            if(x < accum){ return j;}
         } 
     }
-    assert(0); /* Should find a state in the belowing part */
-    
+    // assert(0); /* Should find a state in the belowing part */
+    return 0;
 }
 
 

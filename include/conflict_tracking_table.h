@@ -55,7 +55,7 @@ static inline ctt_node_t*
 ctt_node_create(int state, struct stm_tx *tx, aco_t *co)
 {
     ctt_node_t* node;
-    node = malloc(sizeof(ctt_node_t));
+    node = (ctt_node_t*)malloc(sizeof(ctt_node_t));
     node->prev = NULL;
     node->next = NULL;
     node->state = state;
@@ -70,10 +70,16 @@ ctt_node_delete(ctt_node_t *node)
 {
     // Node is not finished -> return 0
     if(node == NULL) return 0;
-    if(node->finish) return 0;
     else {
         assert(node->co->is_end);
-        if(node->co != NULL) aco_destroy(node->co);
+        if(!node->finish && node->co != NULL) {
+            aco_destroy(node->co);
+            node->co = NULL;
+        }
+        node->finish = true;
+        node->prev = NULL;
+        node->next = NULL;
+        free(node->tx);
         free(node);
         return 1;
     }
@@ -83,7 +89,7 @@ static inline ctt_entry_t*
 ctt_entry_create(int state)
 {
     ctt_entry_t* entry;
-    entry = malloc(sizeof(ctt_entry_t));
+    entry = (ctt_entry_t*)malloc(sizeof(ctt_entry_t));
     entry->state = state;
     entry->size = 0;
     entry->first = NULL;
@@ -95,26 +101,18 @@ static inline int
 ctt_entry_delete(ctt_entry_t *entry)
 {
     // Delete all the nodes inside this entry first
+    ctt_node_t* temp = entry->first;
+    ctt_node_t* next = NULL;
     while(1) {
-        ctt_node_t* temp = entry->last;
-        ctt_node_t* prev = NULL;
         if (temp == NULL) break;
-        prev = temp->prev;
-        if(!ctt_node_delete(temp)) {
-            printf("ctt_node:[%p] is not finished\n", temp);
-            return 0;
+        else {
+            next = temp->next;
+            ctt_node_delete(temp);
+            temp = next;
         }
-        temp = NULL;
-        entry->last = prev;
     }
-
-    if(entry->last != NULL) {
-        printf("ctt_entyr:[%p] has not deleted all nodes yes!!!\n", entry);
-        return 0;
-    } else {
-        free(entry);
-        return 1;
-    }
+    free(entry);
+    return 1;
 }
 
 /* Inserting node to the last of entry */
@@ -124,13 +122,14 @@ ctt_entry_insert(ctt_entry_t *entry, ctt_node_t *node)
     // State is not consist
     assert(entry->state == node->state);
     assert(node->finish == false);
-
-    if (entry->last == NULL) {
+    if (unlikely(entry->size == 0)) {
+        entry->first = node;
         entry->last = node;
     } else {
         entry->last->next = node;
         node->prev = entry->last;
         entry->last = node;
+        node->next = NULL;
     }
     entry->size++;
 }
@@ -140,24 +139,33 @@ static inline ctt_node_t*
 ctt_entry_remove(ctt_entry_t *entry)
 {
     ctt_node_t* res;
-    if (entry->last == NULL) return NULL;
-    res = entry->last;
-    if (res->prev != NULL) res->prev->next = NULL;
-    entry->last = res->prev;
-    res->prev = NULL;
-    (entry->size)-=1;
-    return res;
+    if (unlikely(entry->size == 0)) return NULL;
+    else {
+        res = entry->last;
+        if (unlikely(entry->last->prev == NULL)) {
+            entry->last = NULL;
+            entry->first = NULL;
+        } else {
+            entry->last = entry->last->prev;
+            entry->last->next = NULL;
+        } 
+        entry->size--;
+        res->prev = NULL;
+        res->next = NULL;
+        return res;
+    }
 }
 
 /*
  * 0~(size-1):  transaction state entries
- * size:        recycle entry
+ * [size]:        recycle entry
+ * if size == 0: table->cur_node is not change
 */
 static inline ctt_t*
 ctt_create(int size)
 {
     ctt_t* table;
-    table = malloc(sizeof(ctt_t));
+    table = (ctt_t*)malloc(sizeof(ctt_t));
     table->size = size;
     table->cur_node = NULL;
     table->use_old = 0;
@@ -168,7 +176,7 @@ ctt_create(int size)
     table->sstk = NULL;
     table->coro_func = NULL;
     table->coro_arg = NULL;
-    table->entries = malloc((size+1) * sizeof(ctt_entry_t*));
+    table->entries = (ctt_entry_t**)malloc((size+1) * sizeof(ctt_entry_t*));
     for(int i=0; i < (size+1); i++) {
         table->entries[i] = ctt_entry_create(i);
     }
@@ -181,20 +189,19 @@ ctt_delete(ctt_t *table)
 
     // Free the recyle entry
     /* FIXME: double free error */
-    ctt_entry_delete(table->entries[table->size]);
-    
-    for(int i = 0; i < table->size; i++){
-        assert(table->entries[i]->size == 0);
-        free(table->entries[i]);
+    for (int i=0; i < table->size + 1; i++) {
+        ctt_entry_delete(table->entries[i]);
     }
-
+    free(table->entries);
     /* Free aco relation */
     aco_share_stack_destroy(table->sstk);
     table->sstk = NULL;
-    //aco_destory(table->main_node->co);
+    // aco_destroy(table->main_node->co);
+    // table->main_node->co = NULL;
     table->main_node = NULL;
     table->coro_func = NULL;
     table->coro_arg = NULL;
+    table->cur_node = NULL;
     free(table);
 }
 

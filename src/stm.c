@@ -40,6 +40,7 @@
 #include "helper_thread.h" // Helper_thread
 #include "task_queue.h" // Work-stealing
 #include "conflict_tracking_table.h" // CT_TABLE
+#include "conflict_probability_table.h" /* CPT */
 
 /* ################################################################### *
  * DEFINES
@@ -135,7 +136,19 @@ __thread unsigned int nb_abort = 0;
 #endif /* CM == CM_COROUTINE */
 #ifdef CT_TABLE
 __thread ctt_t* ct_table = NULL;
+__thread int romeo_init = 0;
 #endif /* CT_TABLE */
+#ifdef CPT
+__thread cpt_node_t** cp_table = NULL;
+__thread int cpt_size = 0;
+__thread int nb_commits = 0;
+__thread int nb_aborts = 0;
+__thread float cpt_evap = 0;
+#endif /* CPT */
+#ifdef CONTENTION_INTENSITY
+__thread float tls_ci = 0;
+__thread float tls_alpha = 0;
+#endif /* CONTENTION_INTENSITY */
 #endif /* defined(TLS_COMPILER) */
 
 
@@ -297,6 +310,10 @@ stm_init(void)
   stm_quiesce_init();
 
   tls_init();
+#ifdef CPT
+  // FIXME: use gcpt, and first get the know of how many tranasction a task has.
+  // _tinystm.gcpt = gcpt_init(???);
+#endif /* CPT */
 
 #ifdef SIGNAL_HANDLER
   if (getenv(NO_SIGNAL_HANDLER) == NULL) {
@@ -325,7 +342,9 @@ stm_exit(void)
     return;
 
 #ifdef TM_STATISTICS
+# ifdef STAT_ACCUM
   int_stm_print_stat();
+# endif /* STAT_ACCUM */
 #endif /* TM_STATISTICS */
 
  

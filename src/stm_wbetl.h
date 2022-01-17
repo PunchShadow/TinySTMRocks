@@ -65,6 +65,9 @@ stm_wbetl_validate(stm_tx_t *tx)
             /* Call conflict callback */
             stm_tx_t *other = ((w_entry_t *)LOCK_GET_ADDR(l))->tx;
             _tinystm.conflict_cb(tx, other);
+# ifdef CPT
+            tls_cpt_laying(tx->cur_tx_num, other->cur_tx_num);
+# endif /* CPT */
 # ifdef UNIT_TX
           }
 # endif /* UNIT_TX */
