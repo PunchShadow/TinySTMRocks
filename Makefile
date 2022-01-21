@@ -75,11 +75,11 @@ DEFINES += -DDESIGN=WRITE_BACK_ETL
 ########################################################################
 
 # Pick one contention manager (CM)
-# DEFINES += -DCM=CM_SUICIDE
+DEFINES += -DCM=CM_SUICIDE
 # DEFINES += -DCM=CM_DELAY
 # DEFINES += -DCM=CM_BACKOFF
 # DEFINES += -DCM=CM_MODULAR
-DEFINES += -DCM=CM_COROUTINE
+# DEFINES += -DCM=CM_COROUTINE
 
 ########################################################################
 # Enable irrevocable mode (required for using the library with a
