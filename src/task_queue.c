@@ -65,6 +65,7 @@ ws_task_queue_pop(ws_task_queue* ws_tq, size_t* task_num)
         /* There is no task remaining */
         ws_tq->_bottom = old_top;
         *task_num = num_tasks;
+        // printf("[%lu] no tasks!!\n", pthread_self());
         return NULL;
     } else if (__builtin_expect(num_tasks == 0, 0))
     {
@@ -104,9 +105,10 @@ ws_task_queue_take(ws_task_queue* ws_tq, size_t* num_task)
     num_tasks = old_bottom - old_top;
     *num_task = num_tasks;
 
-    if (__builtin_expect(num_tasks <= 0, 0))
-    
+    if (__builtin_expect(num_tasks <= 0, 0)){
+        // printf("[%lu]: no task to take\n", pthread_self());
         return NULL;
+    }
 
     __sync_synchronize();  /* _top can be incremented by pop. */
     if (!__sync_bool_compare_and_swap(&ws_tq->_top, old_top, new_top))

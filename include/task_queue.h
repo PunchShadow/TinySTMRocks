@@ -13,7 +13,10 @@ extern "C" {
 
 #define WS_TASK_QUEUE_INIT_SIZE 20480
 
+#define hs_task_t ws_task
+
 typedef struct ws_task_queue ws_task_queue;
+
 
 
 typedef struct ws_task {

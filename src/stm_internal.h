@@ -2048,7 +2048,8 @@ int_stm_task_queue_dequeue(stm_tx_t *t, int version)
         task_ptr = ws_task_queue_pop(victim_tq, &num_task);
       }
       
-    } while ((task_ptr == NULL) & (retry_time < _tinystm.task_queue_retry_time));
+    } while ((task_ptr == NULL)
+     & (retry_time < _tinystm.task_queue_retry_time));
     /* For debug functions. */
     if (task_ptr == NULL) {
       PRINT_DEBUG("==> stm_task_Pop_Fail[%p][(%lu.%d), %ld]\n",t, tp, version, num_task);

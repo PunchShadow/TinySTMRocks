@@ -486,6 +486,8 @@
 
 #      define TM_TaskPop(ver)           stm_TaskPop(ver)
 
+#      define TM_TaskPopRaw(ver)        stm_TaskPopRaw(ver)
+
 #      define TM_TaskSplit(data, ver)   stm_TaskSplit(data, ver)
 
 #      define TM_Coroutine(func, arg)   stm_coroutine_register(func, arg); \
