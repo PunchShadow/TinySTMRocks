@@ -11,7 +11,7 @@ extern "C" {
 #include <string.h>
 
 
-#define WS_TASK_QUEUE_INIT_SIZE 20480
+#define WS_TASK_QUEUE_INIT_SIZE 1310720
 
 #define hs_task_t ws_task
 
@@ -129,6 +129,8 @@ ws_task_circular_array_double_size(ws_task_circular_array* old_array)
         exit(1);
     }
     new_array = ws_task_circular_array_new(old_array->_size * 2);
+    /* FIXME: might encounter infinite increasing size */
+    printf("[%lu] memcpy: size: %ld\n", pthread_self(), old_array->_size);
     memcpy(&new_array->_array[0], &old_array->_array[0], sizeof(ws_task*) * old_array->_size);
 
     return new_array;
