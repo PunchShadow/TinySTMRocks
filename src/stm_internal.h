@@ -495,6 +495,8 @@ int_stm_coro_exit(stm_tx_t *tx);
 static INLINE void
 int_stm_coro_resume(stm_tx_t* tx, aco_t *co);
 
+static INLINE void
+int_stm_task_queue_delete(stm_tx_t* tx);
 
 static INLINE void
 int_stm_stat_addTLS(stm_tx_t* tx);
@@ -1442,11 +1444,13 @@ int_stm_exit_thread(stm_tx_t *tx)
 
 #ifdef WORK_STEALING
   /* Task GC */
-  if(tx->taskPtr != NULL) {
-    PRINT_DEBUG("==> stm_task_GC[tx:%p]\n", tx);
-    free(tx->taskPtr);
-    tx->taskPtr = NULL;
-  }
+  // if(tx->taskPtr != NULL) {
+  //   PRINT_DEBUG("==> stm_task_GC[tx:%p]\n", tx);
+  //   free(tx->taskPtr);
+  //   tx->taskPtr = NULL;
+  // }
+  /* Delete current task queue */
+  // int_stm_task_queue_delete(tx);
 #endif /* WORK_STEALING */
 
 #if CM == CM_COROUTINE
@@ -1824,10 +1828,32 @@ int_stm_task_queue_init(long numThread)
     _tinystm.task_queue_info[i] = malloc(sizeof(thread_task_queue_info));
     _tinystm.task_queue_info[i]->task_queue = NULL;
     _tinystm.task_queue_info[i]->thread_id = -1;
+    _tinystm.task_queue_info[i]->occupy = 0;
   }
   pthread_mutex_unlock(&_tinystm.taskqueue_mutex);
   _tinystm.task_queue_nb = numThread; 
   PRINT_DEBUG("==>stm_task_queue_init[tq_nb:%lu][%ld]\n", _tinystm.task_queue_nb, _tinystm.task_queue_split_index);
+}
+
+/* Delete the tx's thread */
+static INLINE void
+int_stm_task_queue_delete(stm_tx_t* tx)
+{
+  pthread_mutex_lock(&_tinystm.taskqueue_mutex);
+  ws_task_queue* cur = _tinystm.task_queue_info[tx->task_queue_position]->task_queue;
+  ws_task_queue* tmp;
+  if (cur == NULL) {
+    pthread_mutex_unlock(&_tinystm.taskqueue_mutex);
+    return;
+  }
+  do {
+    tmp = cur->next;
+    printf("[%p] stm_task_queue_delete[%ld]\n", tx, tx->task_queue_position);
+    ws_task_queue_delete(cur);
+    cur = NULL;
+    cur = tmp;
+  } while(tmp != NULL);
+  pthread_mutex_unlock(&_tinystm.taskqueue_mutex);
 }
 
 
@@ -1842,20 +1868,19 @@ int_stm_task_queue_exit()
   for (long i=0; i < numThread; i++) {
     cur = _tinystm.task_queue_info[i]->task_queue;
     if (cur == NULL) continue;
-    if (cur->_top - cur->_bottom != 0) {
-      PRINT_DEBUG("==> stm_task_queue STILL HAVE TASK[tq:%p][top:%ld][bottom:%ld]\n", cur, cur->_top, cur->_bottom);
-      exit(1);
-    }
     // Free the multiple queues in one thread.
     do {
       tmp = cur->next;
       PRINT_DEBUG("==> stm_free_task_queue[index:%lu][tq:%p]\n", i, cur);
       ws_task_queue_delete(cur);
+      cur = NULL;
       cur = tmp;
     } while(tmp != NULL);
     free(_tinystm.task_queue_info[i]);
+    _tinystm.task_queue_info[i] = NULL;
   }
   free(_tinystm.task_queue_info);
+  _tinystm.task_queue_info = NULL;
 }
 
 /*
@@ -1876,7 +1901,9 @@ int_stm_task_queue_register(stm_tx_t *tx)
   for(long i=0; i < numThread; i++) {
     if(_tinystm.task_queue_info[i]->task_queue != NULL) {
       if(_tinystm.task_queue_info[i]->thread_id == thread_id) {
+        if(_tinystm.task_queue_info[i]->occupy) assert(0);
         tx->task_queue_position = i;
+        _tinystm.task_queue_info[i]->occupy = 1;
         PRINT_DEBUG("==> stm_task_queue_match[tx:%p][id:%lu][tq:%lu]\n", tx, thread_id, tx->task_queue_position);
         pthread_mutex_unlock(&_tinystm.taskqueue_mutex);
         return;
@@ -1891,6 +1918,7 @@ int_stm_task_queue_register(stm_tx_t *tx)
     if(_tinystm.task_queue_info[i]->task_queue != NULL) {
       if(_tinystm.task_queue_info[i]->thread_id == -1) {
         _tinystm.task_queue_info[i]->thread_id = thread_id;
+        _tinystm.task_queue_info[i]->occupy = 1;
         tx->task_queue_position = i;
         PRINT_DEBUG("==> stm_task_queue_register[tx:%p][id:%lu][tq:%lu]\n", tx, thread_id, tx->task_queue_position);
         pthread_mutex_unlock(&_tinystm.taskqueue_mutex);
@@ -1906,6 +1934,7 @@ int_stm_task_queue_register(stm_tx_t *tx)
     if(_tinystm.task_queue_info[i]->task_queue == NULL) {
         _tinystm.task_queue_info[i]->task_queue = mod_dp_task_queue_init();
         _tinystm.task_queue_info[i]->thread_id = thread_id;
+        _tinystm.task_queue_info[i]->occupy = 1;
         tx->task_queue_position = i;
         tx->cur_task_version = 0; // Task version initialization
         PRINT_DEBUG("==> stm_task_queue_create[tx:%p][id:%lu][tq:%lu]\n", tx, thread_id, tx->task_queue_position);
@@ -1922,7 +1951,7 @@ int_stm_task_queue_register(stm_tx_t *tx)
     exit(1);
 
   }
-  
+  PRINT_DEBUG("==> stm_task_queue_register[%d][id:%lu]\n", tx->task_queue_position, thread_id);
 }
 
 static INLINE void
@@ -2031,22 +2060,16 @@ int_stm_task_queue_dequeue(stm_tx_t *t, int version)
       do {
         victim_nb = int_stm_task_queue_victim_select(t);
       } while (_tinystm.task_queue_info[victim_nb]->task_queue == NULL);
-      /* Check if the victim task queue is empty */
-      if (ws_task_isEmpty(_tinystm.task_queue_info[victim_nb]->task_queue)) {
-        // TODO: Keep thread alive & stealing works to do.
-        retry_time ++;
-        //printf("retry_time: %d, victim: %ld\n", retry_time, victim_nb);
-        continue;
-      } else {
-        ws_task_queue* victim_tq = _tinystm.task_queue_info[victim_nb]->task_queue;
-        while (victim_tq != NULL) {
-          if (version == victim_tq->taskNum) break;
-          else {
-            victim_tq = victim_tq->next;
-          }
+
+      ws_task_queue* victim_tq = _tinystm.task_queue_info[victim_nb]->task_queue;
+      while (victim_tq != NULL) {
+        if (version == victim_tq->taskNum) break;
+        else {
+          victim_tq = victim_tq->next;
         }
-        task_ptr = ws_task_queue_pop(victim_tq, &num_task);
       }
+      task_ptr = ws_task_queue_pop(victim_tq, &num_task);
+      if (task_ptr == NULL) retry_time++;
       
     } while ((task_ptr == NULL)
      & (retry_time < _tinystm.task_queue_retry_time));

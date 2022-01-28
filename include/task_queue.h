@@ -9,7 +9,7 @@ extern "C" {
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
-
+#include "concurrentqueue.h"
 
 #define WS_TASK_QUEUE_INIT_SIZE 1310720
 
@@ -40,9 +40,7 @@ typedef struct ws_task_circular_array {
 
 
 typedef struct ws_task_queue {
-    struct ws_task_circular_array* _task_queue;
-    volatile size_t _top;
-    volatile size_t _bottom;
+    MoodycamelCQHandle _task_queue;
     /* For multiple task queues */
     int taskNum;
     ws_task_queue* next;
@@ -101,7 +99,9 @@ ws_task_circular_array_delete(ws_task_circular_array* ws_array)
     */
     
     free(ws_array->_array);
+    ws_array->_array = NULL;
     free(ws_array);
+    ws_array = NULL;
 }
 
 
@@ -114,8 +114,6 @@ ws_task_circular_array_get(ws_task_circular_array* ws_array, unsigned long index
 static inline void
 ws_task_circular_array_set(ws_task_circular_array* ws_array, unsigned long index, ws_task* task)
 {
-    //ws_task* pos = ws_array->_array[ index % ws_array->_size ];
-    //if(pos != NULL) free(pos); 
     ws_array->_array[ index % ws_array->_size ] = task;
 }
 
@@ -131,7 +129,7 @@ ws_task_circular_array_double_size(ws_task_circular_array* old_array)
     new_array = ws_task_circular_array_new(old_array->_size * 2);
     /* FIXME: might encounter infinite increasing size */
     printf("[%lu] memcpy: size: %ld\n", pthread_self(), old_array->_size);
-    memcpy(&new_array->_array[0], &old_array->_array[0], sizeof(ws_task*) * old_array->_size);
+    memmove(&new_array->_array[0], &old_array->_array[0], sizeof(ws_task*) * old_array->_size);
 
     return new_array;
 }

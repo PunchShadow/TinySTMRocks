@@ -49,6 +49,7 @@ extern "C" {
 typedef struct thread_task_queue_info {
     ws_task_queue* task_queue; /* Pointer thread own task queue */
     pthread_t thread_id; /* Identify */
+    int occupy;
     //thread_task_queue_info* next;
 } thread_task_queue_info;
 

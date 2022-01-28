@@ -290,7 +290,7 @@ else
   GC :=
 endif
 
-CPPFLAGS += -I$(SRCDIR) -I$(PCMDIR) -I$(CORDIR)
+CPPFLAGS += -I$(SRCDIR) -I$(PCMDIR) -I$(CORDIR) -I$(CQDIR)
 CPPFLAGS += $(DEFINES)
 
 MODULES := $(patsubst %.c,%.o,$(wildcard $(SRCDIR)/mod_*.c))
@@ -320,7 +320,7 @@ acosw.o: $(CORDIR)/acosw.S
 
 
 # Additional dependencies
-$(SRCDIR)/stm.o:	$(INCDIR)/stm.h $(INCDIR)/helper_thread.h $(INCDIR)/task_queue.h
+$(SRCDIR)/stm.o:	$(INCDIR)/stm.h $(INCDIR)/helper_thread.h $(INCDIR)/task_queue.h $(CQDIR)/concurrentqueue.h
 $(SRCDIR)/stm.o:	$(SRCDIR)/stm_internal.h $(SRCDIR)/stm_wt.h $(SRCDIR)/stm_wbetl.h $(SRCDIR)/stm_wbctl.h $(SRCDIR)/tls.h $(SRCDIR)/utils.h $(SRCDIR)/atomic.h
 
 %.s:	%.c Makefile
@@ -330,7 +330,7 @@ $(SRCDIR)/stm.o:	$(SRCDIR)/stm_internal.h $(SRCDIR)/stm_wt.h $(SRCDIR)/stm_wbetl
 	$(UNIFDEF) $(D) $< > $@ || true
 
 # Link additional PCM object $(PCMOBJ) to libstm.a
-$(TMLIB):	$(SRCDIR)/$(TM).o $(COROBJ) $(SRCDIR)/wrappers.o $(SRCDIR)/helper_thread.o $(PCMOBJ) $(WSOBJ) $(GC) $(MODULES)
+$(TMLIB):	$(SRCDIR)/$(TM).o $(COROBJ) $(SRCDIR)/wrappers.o $(SRCDIR)/helper_thread.o $(PCMOBJ) $(WSOBJ) $(CQOBJ) $(GC) $(MODULES)
 	$(AR) crus $@ $^
 
 test:	$(TMLIB)

@@ -27,6 +27,11 @@ PCMOBJ += $(PCMLIB)/mmio.o $(PCMLIB)/client_bw.o $(PCMLIB)/utils.o
 PCMOBJ += $(PCMLIB)/topology.o $(PCMLIB)/dashboard.o $(PCMLIB)/debug.o 
 PMCOBJ += $(PCMLIB)/threadpool.o $(PCMLIB)/resctrl.o $(PCMLIB)/msr.o -pthread -lrt
 
+# Concurrent queue
+CQDIR = $(ROOT)/concurrentqueue/c_api
+CQLIB = $(ROOT)/concurrentqueue/c_api
+CQOBJ = $(CQDIR)/concurrentqueue.o
+
 
 # Work-stealing
 WSOBJ = $(ROOT)/src/task_queue.o
