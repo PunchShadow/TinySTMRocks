@@ -1096,6 +1096,7 @@ stm_rollback(stm_tx_t *tx, unsigned int reason)
 #ifdef RTM_PROFILING
   PROF_ABORT();
 #endif /* RTM_PROFILING */
+  tls_on_abort();
 
   /* Set status to ABORTED */
   SET_STATUS(tx->status, TX_ABORTED);
@@ -1439,7 +1440,9 @@ int_stm_exit_thread(stm_tx_t *tx)
       avg_aborts = (double)tx->stat_aborts / tx->stat_commits;
     printf("Thread %p | commits:%12u avg_aborts:%12.2f max_retries:%12u\n", (void *)pthread_self(), tx->stat_commits, avg_aborts, tx->stat_retries_max);
   }
+# ifdef STAT_ACCUM
   int_stm_stat_accum(tx); // Write accum to TLS
+# endif /* STAT_ACCUM */
 #endif /* TM_STATISTICS */
 
 #ifdef WORK_STEALING
@@ -1575,7 +1578,7 @@ int_stm_commit(stm_tx_t *tx)
 #ifdef RTM_PROFILING
   PROF_COMMIT();
 #endif /* RTM_PROFILING*/
-
+  tls_on_commit();
 #if CM == CM_BACKOFF
   /* Reset backoff */
   tx->backoff = MIN_BACKOFF;
@@ -1820,7 +1823,7 @@ static INLINE void
 int_stm_task_queue_init(long numThread)
 {
   
-  _tinystm.task_queue_retry_time = 1000; // The retry time to steal task
+  _tinystm.task_queue_retry_time = 30; // The retry time to steal task
   _tinystm.task_queue_split_index = -1; // Initalize the split index
   pthread_mutex_lock(&_tinystm.taskqueue_mutex);
   _tinystm.task_queue_info = malloc(sizeof(thread_task_queue_info*) * numThread );
@@ -2183,7 +2186,9 @@ int_stm_task_exit(stm_tx_t* tx)
       tx->taskPtr = NULL;
     }
 #ifdef TM_STATISTICS
+# ifdef STAT_ACCUM
     int_stm_stat_accum(tx); // Write accum to TLS
+# endif /* STAT_ACCUM */
 #endif /* TM_STATISTICS */
     tls_switch_tx(); // Switch to main-tx
     aco_exit();
@@ -2438,6 +2443,7 @@ int_stm_get_coro_arg(stm_tx_t* tx)
 #endif /* CM == CM_COROUTINE */
 
 #ifdef TM_STATISTICS
+# ifdef STAT_ACCUM
 /* Record cumulative stats to TLS 
 *  type: 0 nb_commit
 *        1 nb_abort
@@ -2495,6 +2501,7 @@ int_stm_print_stat(void)
   printf("          commit_rate:       %.6f\n", (double)_tinystm.to_nb_commits/((double)_tinystm.to_nb_commits+(double)_tinystm.to_nb_aborts));
   
 }
+# endif /* STAT_ACCUM */
 #endif /* TM_STATISTICS */
 
 

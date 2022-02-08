@@ -128,8 +128,7 @@ ws_task_circular_array_double_size(ws_task_circular_array* old_array)
     }
     new_array = ws_task_circular_array_new(old_array->_size * 2);
     /* FIXME: might encounter infinite increasing size */
-    printf("[%lu] memcpy: size: %ld\n", pthread_self(), old_array->_size);
-    memmove(&new_array->_array[0], &old_array->_array[0], sizeof(ws_task*) * old_array->_size);
+    memcpy(&new_array->_array[0], &old_array->_array[0], sizeof(ws_task*) * old_array->_size);
 
     return new_array;
 }

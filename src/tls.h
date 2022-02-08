@@ -110,28 +110,31 @@ tls_set_gc(long gc)
 }
 
 #elif defined(TLS_COMPILER)
-#if CM == CM_COROUTINE
 extern __thread struct stm_tx * thread_tx;
 extern __thread long thread_gc;
-
-extern __thread struct stm_tx * thread_shadow_tx;
-extern __thread int is_co;
 extern __thread unsigned int nb_commit;
 extern __thread unsigned int nb_abort;
 
 static INLINE void
-tls_set_stat(int type, unsigned int nb)
+tls_on_commit()
 {
-  if (type == 0) nb_commit += nb;
-  else nb_abort += nb;
+#ifdef STAT_ACCUM
+  nb_commit++;
+#endif /* STAT_ACCUM */
 }
 
 static INLINE void
-tls_get_stat(void* nb_commits, void* nb_aborts)
+tls_on_abort()
 {
-  *(unsigned int *)nb_commits = nb_commit;
-  *(unsigned int *)nb_aborts = nb_abort;
+#ifdef STAT_ACCUM
+  nb_abort++;
+#endif /* STAT_ACCUM */
 }
+
+
+#if CM == CM_COROUTINE
+extern __thread struct stm_tx * thread_shadow_tx;
+extern __thread int is_co;
 
 static INLINE void
 tls_init(void)

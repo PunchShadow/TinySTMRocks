@@ -95,8 +95,8 @@ DEFINES += -DIRREVOCABLE_ENABLED
 # from disabling them.
 ########################################################################
 
-# DEFINES += -DTM_STATISTICS
-DEFINES += -UTM_STATISTICS
+DEFINES += -DTM_STATISTICS
+# DEFINES += -UTM_STATISTICS
 # DEFINES += -DTM_STATISTICS2
 DEFINES += -UTM_STATISTICS2
 
@@ -229,6 +229,14 @@ DEFINES += -UHELPER_THREAD
 
 DEFINES += -DWORK_STEALING
 # DEFINES += -UWORK_STEALING
+
+########################################################################
+# Show the total commit and abort transaction number at the end.
+########################################################################
+
+DEFINES += -DSTAT_ACCUM
+# DEFINES += -USTAT_ACCUM
+
 
 ########################################################################
 # Various default values can also be overridden:

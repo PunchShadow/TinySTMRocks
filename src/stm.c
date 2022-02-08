@@ -124,11 +124,11 @@ pthread_key_t thread_shadow_tx;
 #elif defined(TLS_COMPILER)
 __thread stm_tx_t* thread_tx = NULL;
 __thread long thread_gc = 0;
+__thread unsigned int nb_commit = 0;
+__thread unsigned int nb_abort = 0;
 #if CM == CM_COROUTINE
 __thread stm_tx_t* thread_shadow_tx = NULL;
 __thread int is_co = 0;
-__thread unsigned int nb_commit = 0;
-__thread unsigned int nb_abort = 0;
 #endif /* CM == CM_COROUTINE */
 #endif /* defined(TLS_COMPILER) */
 
@@ -319,7 +319,9 @@ stm_exit(void)
     return;
 
 #ifdef TM_STATISTICS
+# ifdef STAT_ACCUM
   int_stm_print_stat();
+# endif /* STAT_ACCUM */
 #endif /* TM_STATISTICS */
 
  
