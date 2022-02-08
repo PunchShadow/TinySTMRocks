@@ -38,6 +38,8 @@
 #include "mod_dp.h" /* Work-stealing */
 #include "task_queue.h" 
 #include "aco.h" /* CM_COROUTINE */
+#include "conflict_tracking_table.h" /* CTT */
+#include "conflict_probability_table.h" /* CPT */
 #include "mod_mem.h"
 
 //#include "aco_assert_override.h" /* CM_COROUTINE */
@@ -87,7 +89,11 @@
 # error "SIGNAL_HANDLER can only be used without EPOCH_GC"
 #endif /* defined(EPOCH_GC) && defined(SIGNAL_HANDLER) */
 
-#define TX_GET                          stm_tx_t *tx = tls_get_tx()
+#ifdef CT_TABLE
+  #define TX_GET                        stm_tx_t *tx = tls_get_tx(0)
+#else /* !CT_TABLE */
+  #define TX_GET                          stm_tx_t *tx = tls_get_tx()
+#endif /* CT_TABLE */
 
 #ifndef RW_SET_SIZE
 # define RW_SET_SIZE                    4096                /* Initial size of read/write sets */
@@ -137,6 +143,14 @@
 # define JMP_BUF                        sigjmp_buf
 # define LONGJMP(ctx, value)            siglongjmp(ctx, value)
 #endif /* !CTX_LONGJMP && !CTX_ITM */
+
+#ifdef CT_TABLE
+# define MAX_TABLE_SIZE 15 /* TODO: Auto set by the maximum transactions correspoding to application */
+#endif /* CT_TABLE */
+
+#ifdef CONTENTION_INTENSITY
+# define ci_alpha 0.95     /* TODO: hyper-parameter of alpha */
+#endif /* CONTENTION_INTENSITY */
 
 
 /* ################################################################### *
@@ -393,7 +407,10 @@ typedef struct stm_tx {                 /* Transaction descriptor */
   JMP_BUF task_queue_end;               /* Store the end of TM_THREAD_EXIT() */
   ws_task* taskPtr;                     /* Pointer to current task -> used for garbage collection */
 #endif /* WORK_STEALING */
-
+#ifdef TX_NUMBERING
+  int cur_tx_num;                       /* Identify execution transction through __COUNTER__ */
+  int max_tx;                           /* Maximum number of transactions used in this thread */
+#endif /* TX_NUMBERING */
 } stm_tx_t;
 
 /* This structure should be ordered by hot and cold variables */
@@ -445,6 +462,10 @@ typedef struct {
   unsigned int to_nb_commits;
   unsigned int to_nb_aborts;
 #endif /* TM_STATISTICS */
+#ifdef CPT
+  gcpt_t* gcpt;                         /* Global Conflict Probability Table */
+  float evap_rate;                      /* Evaporating ratio of ACO */
+#endif /* CPT */
 
   /* At least twice a cache line (256 bytes to be on the safe side) */
   char padding[CACHELINE_SIZE];
@@ -506,6 +527,7 @@ int_stm_print_stat(void);
 
 static INLINE void
 int_stm_stat_accum(stm_tx_t* tx);
+
 
 /* ################################################################### *
  * INLINE FUNCTIONS
@@ -1108,13 +1130,22 @@ stm_rollback(stm_tx_t *tx, unsigned int reason)
 
   /* Reset nesting level */
   tx->nesting = 1;
-
+// #ifdef CT_TABLE
+//   if (tls_get_isMain()) {
+//     if (likely(_tinystm.nb_abort_cb != 0)) {
+//       unsigned int cb;
+//       for (cb = 0; cb < _tinystm.nb_abort_cb; cb++)
+//         _tinystm.abort_cb[cb].f(_tinystm.abort_cb[cb].arg);
+//     }
+//   }
+// #else /* !CT_TABLE */
   /* Callbacks */
   if (likely(_tinystm.nb_abort_cb != 0)) {
     unsigned int cb;
     for (cb = 0; cb < _tinystm.nb_abort_cb; cb++)
       _tinystm.abort_cb[cb].f(_tinystm.abort_cb[cb].arg);
   }
+// #endif /* CT_TABLE */
 
 #if CM == CM_BACKOFF
   /* Simple RNG (good enough for backoff) */
@@ -1145,6 +1176,15 @@ stm_rollback(stm_tx_t *tx, unsigned int reason)
   /* Use coroutine contention manager */
   int_stm_coro_CM(tx);
 #endif /* CM == CM_COROUTINE */
+#if CM == CM_SHADOWTASK
+  if (tx->max_tx != 0) {
+    if (tls_get_isMain()) {
+      tls_scheduler(2);
+    } else {
+      tls_scheduler(3);
+    }
+  }
+#endif /* CM == CM_SHADOWTASK */
 
 
   /* Don't prepare a new transaction if no retry. */
@@ -1279,12 +1319,17 @@ int_stm_WaW(stm_tx_t *tx, volatile stm_word_t *addr, stm_word_t value, stm_word_
 }
 
 static INLINE stm_tx_t *
+#ifdef CT_TABLE
+int_stm_init_thread(int max_tx)
+#else /* !CT_TABLE */
 int_stm_init_thread(void)
+#endif /* !CT_TABLE */
 {
   stm_tx_t *tx;
 
   PRINT_DEBUG("==> stm_init_thread[%lu]\n", pthread_self());
-
+  /* FIXME: integrate all one-time TLS data structure initialization to it */
+  tls_one_time_init(max_tx, ci_alpha);
 #if CM == CM_COROUTINE
   /* Avoid initializing more than once */
   int is_co = tls_get_co();
@@ -1302,9 +1347,13 @@ int_stm_init_thread(void)
     }
     PRINT_DEBUG("==> stm_init_thread_not_co_success[%p][%lu]\n", tx, pthread_self());
   }
-#else /* CM != CM_COROUTINE */    
-  if ((tx = tls_get_tx()) != NULL) return tx;
 #endif /* CM == CM_COROUTINE*/
+#ifdef CT_TABLE    
+  if ((tx = tls_get_tx(max_tx)) != NULL) return tx;
+#else /* !CT_TABLE */
+  if ((tx = tls_get_tx()) != NULL) return tx;
+#endif /* CT_TABLE */
+
 
 #ifdef EPOCH_GC
   gc_init_thread();
@@ -1379,6 +1428,9 @@ int_stm_init_thread(void)
   tx->stat_locked_reads_failed = 0;
 # endif /* READ_LOCKED_DATA */
 #endif /* TM_STATISTICS2 */
+#ifdef TX_NUMBERING
+  tx->cur_tx_num = -1; // To identify the initial state.
+#endif /* TX_NUMBERING */
 #ifdef IRREVOCABLE_ENABLED
   tx->irrevocable = 0;
 #endif /* IRREVOCABLE_ENABLED */
@@ -1387,9 +1439,17 @@ int_stm_init_thread(void)
   tls_set_tx(tx);
 #if CM == CM_COROUTINE
   if (is_co == 0) stm_quiesce_enter_thread(tx);
-#else /* CM != CM_COROUTINE */
-  stm_quiesce_enter_thread(tx);
+// #else /* CM != CM_COROUTINE */
+//   stm_quiesce_enter_thread(tx);
 #endif /* CM == CM_CORUOTINE */
+
+#ifdef CT_TABLE
+  if (tls_get_isMain()) stm_quiesce_enter_thread(tx);
+  tx->max_tx = max_tx;
+#else /* !CT_TABLE */
+  stm_quiesce_enter_thread(tx);
+#endif /* !CT_TABLE */
+
 
 #if CM == CM_COROUTINE
   if (is_co == 0) {
@@ -1401,14 +1461,42 @@ int_stm_init_thread(void)
   } else {
     mod_mem_coro_init(); // Init icb in coroutine TX
   }
-#else /* CM != CM_COROUTINE */
-  /* Callbacks */
+// #else /* CM != CM_COROUTINE */
+//   /* Callbacks */
+//   if (likely(_tinystm.nb_init_cb != 0)) {
+//     unsigned int cb;
+//     for (cb = 0; cb < _tinystm.nb_init_cb; cb++)
+//       _tinystm.init_cb[cb].f(_tinystm.init_cb[cb].arg);
+//   }
+#endif /* CM == CM_COROUTINE */
+
+#ifdef CT_TABLE
+  if (max_tx != 0) {
+    if (tls_get_isMain()) {
+      if (likely(_tinystm.nb_init_cb != 0)) {
+        unsigned int cb;
+        for (cb = 0; cb < _tinystm.nb_init_cb; cb++)
+          _tinystm.init_cb[cb].f(_tinystm.init_cb[cb].arg);
+      }  
+    } else {
+      mod_mem_coro_init(); // Init icb in coroutine TX
+    }
+  } else {
+      if (likely(_tinystm.nb_init_cb != 0)) {
+        unsigned int cb;
+        for (cb = 0; cb < _tinystm.nb_init_cb; cb++)
+          _tinystm.init_cb[cb].f(_tinystm.init_cb[cb].arg);
+      }    
+  }
+#else /* !CT_TABLE */
   if (likely(_tinystm.nb_init_cb != 0)) {
     unsigned int cb;
     for (cb = 0; cb < _tinystm.nb_init_cb; cb++)
       _tinystm.init_cb[cb].f(_tinystm.init_cb[cb].arg);
-  }
-#endif /* CM == CM_COROUTINE */
+  }  
+#endif /* !CT_TABLE */
+
+
 
   return tx;
 }
@@ -1425,12 +1513,22 @@ int_stm_exit_thread(stm_tx_t *tx)
   if (tx == NULL)
     return;
 
+// #ifdef CT_TABLE
+//   if (tls_get_isMain()) {
+//     if (likely(_tinystm.nb_exit_cb != 0)) {
+//       unsigned int cb;
+//       for (cb = 0; cb < _tinystm.nb_exit_cb; cb++)
+//       _tinystm.exit_cb[cb].f(_tinystm.exit_cb[cb].arg);
+//     }
+//   }
+// #else /* !CT_TABLE */
   /* Callbacks */
   if (likely(_tinystm.nb_exit_cb != 0)) {
     unsigned int cb;
     for (cb = 0; cb < _tinystm.nb_exit_cb; cb++)
       _tinystm.exit_cb[cb].f(_tinystm.exit_cb[cb].arg);
   }
+// #endif /* CT_TABLE */
 
 #ifdef TM_STATISTICS
   /* Display statistics before to lose it */
@@ -1462,9 +1560,49 @@ int_stm_exit_thread(stm_tx_t *tx)
     int_stm_coro_exit(tx);
     stm_quiesce_exit_thread(tx);
   }
-#else /* CM != CM_COROUTINE */
-  stm_quiesce_exit_thread(tx);
+// #else /* CM != CM_COROUTINE */
+//   stm_quiesce_exit_thread(tx);
 #endif /* CM == CM_COROUTINE */
+
+#ifdef CT_TABLE
+  if (tx->max_tx != 0) {
+    if (tls_get_isMain()) {
+      tls_scheduler(0); /* Main co entering -> no more task in task queue */
+      tls_one_time_exit(tx->max_tx);
+      stm_quiesce_exit_thread(tx);
+    } else {
+      /* First garbage collection of tx */
+# ifdef EPOCH_GC
+      t = GET_CLOCK;
+      gc_free(tx->r_set.entries, t);
+      gc_free(tx->w_set.entries, t);
+      gc_free(tx, t);
+      gc_exit_thread();
+# else /* ! EPOCH_GC */
+      xfree(tx->r_set.entries);
+      xfree(tx->w_set.entries);
+      xfree(tx);
+# endif /* ! EPOCH_GC */    
+      tls_scheduler(1); /* Non-main CO END HERE !!!!! Including aco_exit() */
+    }
+  } else {
+    stm_quiesce_exit_thread(tx);
+# ifdef EPOCH_GC
+    t = GET_CLOCK;
+    gc_free(tx->r_set.entries, t);
+    gc_free(tx->w_set.entries, t);
+    gc_free(tx, t);
+    gc_exit_thread();
+# else /* ! EPOCH_GC */
+    xfree(tx->r_set.entries);
+    xfree(tx->w_set.entries);
+    xfree(tx);
+# endif /* ! EPOCH_GC */
+    tls_set_tx(NULL);    
+  }
+  
+#else /* !CT_TABLE */
+  stm_quiesce_exit_thread(tx);
 
 
 #ifdef EPOCH_GC
@@ -1479,15 +1617,23 @@ int_stm_exit_thread(stm_tx_t *tx)
   xfree(tx);
 #endif /* ! EPOCH_GC */
 
-  PRINT_DEBUG("==> stm_exit_thread_set_tls_NULL[%lu]\n", pthread_self());
-  tls_set_tx(NULL);
 #if CM == CM_COROUTINE
   if (is_co == 1) int_stm_non_main_coro_exit();
 #endif /* CM == CM_COROUTINE */
+
+// FIXME: tx is recycled tx->max_tx is garbage 
+  PRINT_DEBUG("==> stm_exit_thread_set_tls_NULL[%lu]\n", pthread_self());
+  tls_set_tx(NULL);
+#endif /* !CT_TABLE */
 }
 
+
 static INLINE sigjmp_buf *
+#ifdef TX_NUMBERING
+int_stm_start(stm_tx_t *tx, stm_tx_attr_t attr, int numbering)
+#else /* !TX_NUMBERING */
 int_stm_start(stm_tx_t *tx, stm_tx_attr_t attr)
+#endif /* !TX_NUMBERING */
 {
   PRINT_DEBUG("==> stm_start(%p)\n", tx);
 
@@ -1500,17 +1646,37 @@ int_stm_start(stm_tx_t *tx, stm_tx_attr_t attr)
 
   /* Attributes */
   tx->attr = attr;
+  
+#ifdef TX_NUMBERING
+  // if (tx->cur_tx_num == -1) {tx->cur_tx_num = numbering;}
+  // else {
+  //   if (numbering > tx->cur_tx_num) tx->cur_tx_num = numbering;
+  // }
+  tx->cur_tx_num = numbering;
+  if (tx->max_tx != 0) tls_set_node_state(numbering);
+  PRINT_DEBUG("TX_NUMBERING: current execution[%d]:[tx:%p]\n", tx->cur_tx_num, tx);
+#endif /* TX_NUMBERING */
 
   /* Initialize transaction descriptor */
   int_stm_prepare(tx);
   PRINT_DEBUG("--> stm_start_prepare_finished[%p]\n", tx);
+
+// #ifdef CT_TABLE
+//   if (tls_get_isMain()) {
+//     if (likely(_tinystm.nb_start_cb != 0)) {
+//       unsigned int cb;
+//       for (cb = 0; cb < _tinystm.nb_start_cb; cb++)
+//         _tinystm.start_cb[cb].f(_tinystm.start_cb[cb].arg);
+//     }    
+//   }
+// #else /* !CT_TABLE */  
   /* Callbacks */
   if (likely(_tinystm.nb_start_cb != 0)) {
     unsigned int cb;
     for (cb = 0; cb < _tinystm.nb_start_cb; cb++)
       _tinystm.start_cb[cb].f(_tinystm.start_cb[cb].arg);
   }
-
+// #endif /* CT_TABLE */
   return &tx->env;
 }
 
@@ -1527,13 +1693,22 @@ int_stm_commit(stm_tx_t *tx)
   if (unlikely(--tx->nesting > 0))
     return 1;
 
+// #ifdef CT_TABLE
+//   if (tls_get_isMain()) {
+//     if (unlikely(_tinystm.nb_precommit_cb != 0)) {
+//       unsigned int cb;
+//       for (cb = 0; cb < _tinystm.nb_precommit_cb; cb++)
+//         _tinystm.precommit_cb[cb].f(_tinystm.precommit_cb[cb].arg);
+//     }
+//   }
+// #else /* !CT_TABLE */
   /* Callbacks */
   if (unlikely(_tinystm.nb_precommit_cb != 0)) {
     unsigned int cb;
     for (cb = 0; cb < _tinystm.nb_precommit_cb; cb++)
       _tinystm.precommit_cb[cb].f(_tinystm.precommit_cb[cb].arg);
   }
-
+// #endif /* CT_TABLE */
   assert(IS_ACTIVE(tx->status));
 
 #if CM == CM_MODULAR
@@ -1600,13 +1775,22 @@ int_stm_commit(stm_tx_t *tx)
   /* Set status to COMMITTED */
   SET_STATUS(tx->status, TX_COMMITTED);
 
+// #ifdef CT_TABLE
+//   if (tls_get_isMain()) {
+//     if (likely(_tinystm.nb_commit_cb != 0)) {
+//       unsigned int cb;
+//       for (cb = 0; cb < _tinystm.nb_commit_cb; cb++)
+//         _tinystm.commit_cb[cb].f(_tinystm.commit_cb[cb].arg);
+//     } 
+//   }
+// #else /* !CT_TABLE */
   /* Callbacks */
   if (likely(_tinystm.nb_commit_cb != 0)) {
     unsigned int cb;
     for (cb = 0; cb < _tinystm.nb_commit_cb; cb++)
       _tinystm.commit_cb[cb].f(_tinystm.commit_cb[cb].arg);
   }
-
+// #endif /* CT_TABLE */
   return 1;
 }
 
@@ -1825,15 +2009,16 @@ int_stm_task_queue_init(long numThread)
   
   _tinystm.task_queue_retry_time = 30; // The retry time to steal task
   _tinystm.task_queue_split_index = -1; // Initalize the split index
-  pthread_mutex_lock(&_tinystm.taskqueue_mutex);
+  // pthread_mutex_lock(&_tinystm.taskqueue_mutex);
   _tinystm.task_queue_info = malloc(sizeof(thread_task_queue_info*) * numThread );
   for ( long i=0; i < numThread; i++) {
     _tinystm.task_queue_info[i] = malloc(sizeof(thread_task_queue_info));
     _tinystm.task_queue_info[i]->task_queue = NULL;
     _tinystm.task_queue_info[i]->thread_id = -1;
     _tinystm.task_queue_info[i]->occupy = 0;
+    pthread_spin_init(&(_tinystm.task_queue_info[i]->tq_spinlock), 1);
   }
-  pthread_mutex_unlock(&_tinystm.taskqueue_mutex);
+  // pthread_mutex_unlock(&_tinystm.taskqueue_mutex);
   _tinystm.task_queue_nb = numThread; 
   PRINT_DEBUG("==>stm_task_queue_init[tq_nb:%lu][%ld]\n", _tinystm.task_queue_nb, _tinystm.task_queue_split_index);
 }
@@ -1866,8 +2051,8 @@ int_stm_task_queue_exit()
   PRINT_DEBUG("==>stm_task_queue_exit\n");
 
   long numThread = _tinystm.task_queue_nb;
-  ws_task_queue* tmp;
-  ws_task_queue* cur;
+  hs_task_queue_t* tmp;
+  hs_task_queue_t* cur;
   for (long i=0; i < numThread; i++) {
     cur = _tinystm.task_queue_info[i]->task_queue;
     if (cur == NULL) continue;
@@ -1879,6 +2064,7 @@ int_stm_task_queue_exit()
       cur = NULL;
       cur = tmp;
     } while(tmp != NULL);
+    pthread_spin_destroy(&(_tinystm.task_queue_info[i]->tq_spinlock));
     free(_tinystm.task_queue_info[i]);
     _tinystm.task_queue_info[i] = NULL;
   }
@@ -1900,7 +2086,6 @@ int_stm_task_queue_register(stm_tx_t *tx)
   tx->task_queue_position = -1;
 
   /* First, find whether there is allocated task queue with corresponding thread_id */
-  pthread_mutex_lock(&_tinystm.taskqueue_mutex);
   for(long i=0; i < numThread; i++) {
     if(_tinystm.task_queue_info[i]->task_queue != NULL) {
       if(_tinystm.task_queue_info[i]->thread_id == thread_id) {
@@ -1908,15 +2093,14 @@ int_stm_task_queue_register(stm_tx_t *tx)
         tx->task_queue_position = i;
         _tinystm.task_queue_info[i]->occupy = 1;
         PRINT_DEBUG("==> stm_task_queue_match[tx:%p][id:%lu][tq:%lu]\n", tx, thread_id, tx->task_queue_position);
-        pthread_mutex_unlock(&_tinystm.taskqueue_mutex);
         return;
       }
     }
   }
-  pthread_mutex_unlock(&_tinystm.taskqueue_mutex);
+
 
   /* Second, consider whether there is any task queue allocated but not assigned to certain thread. */
-  pthread_mutex_lock(&_tinystm.taskqueue_mutex);
+
   for(long i=0; i < numThread; i++) {
     if(_tinystm.task_queue_info[i]->task_queue != NULL) {
       if(_tinystm.task_queue_info[i]->thread_id == -1) {
@@ -1929,10 +2113,9 @@ int_stm_task_queue_register(stm_tx_t *tx)
       }
     }
   }
-  pthread_mutex_unlock(&_tinystm.taskqueue_mutex);
+
 
   /* Third, we have to find a empty index to allocate a new task queue */
-  pthread_mutex_lock(&_tinystm.taskqueue_mutex);
   for(long i=0; i < numThread; i++) {
     if(_tinystm.task_queue_info[i]->task_queue == NULL) {
         _tinystm.task_queue_info[i]->task_queue = mod_dp_task_queue_init();
@@ -1946,7 +2129,6 @@ int_stm_task_queue_register(stm_tx_t *tx)
     }
   }
 
-  pthread_mutex_unlock(&_tinystm.taskqueue_mutex);
 
   /* Finally, there is an error if we cannot find or create task queue for the tx */
   if(tx->task_queue_position == -1) {
@@ -1958,21 +2140,20 @@ int_stm_task_queue_register(stm_tx_t *tx)
 }
 
 static INLINE void
-int_stm_task_queue_split(ws_task* ws_task, int version)
+int_stm_task_queue_split(hs_task_t* ws_task, int version)
 {
-  size_t num_task;
   /* Find the next index to push task to. */
   long index = (_tinystm.task_queue_split_index + 1) % _tinystm.task_queue_nb;
   /* First time access the task queue, so we need to initialize. */
   pthread_mutex_lock(&_tinystm.taskqueue_mutex);
   if(_tinystm.task_queue_info[index]->task_queue == NULL) {
-    _tinystm.task_queue_info[index]->task_queue = ws_task_queue_new(version);
+    _tinystm.task_queue_info[index]->task_queue = hs_task_queue_new(version);
     _tinystm.task_queue_info[index]->thread_id = -1;
     PRINT_DEBUG("==> stm_task_queue_split_init:[index:%lu]\n", index);
   }
   
-  ws_task_queue* tq = _tinystm.task_queue_info[index]->task_queue;
-  ws_task_queue* tmp = _tinystm.task_queue_info[index]->task_queue;
+  hs_task_queue_t* tq = _tinystm.task_queue_info[index]->task_queue;
+  hs_task_queue_t* tmp = _tinystm.task_queue_info[index]->task_queue;
   PRINT_DEBUG("==> stm_task_queue_split[tq:%p][index:%lu]\n", tq, index);
   /* Search corresponding version of task queue */
   while (tq != NULL) {
@@ -1984,29 +2165,28 @@ int_stm_task_queue_split(ws_task* ws_task, int version)
   }
   /* If there is no corresponding version, create new one. */
   if (tq == NULL) {
-    tq = ws_task_queue_new(version);
+    tq = hs_task_queue_new(version);
     tmp->next = tq;
     PRINT_DEBUG("==> stm_task_split_new_task_queue[tq:%p]\n", tq);
   }
   pthread_mutex_unlock(&_tinystm.taskqueue_mutex);
-  ws_task_queue_push(tq, ws_task, &num_task);
+  hs_task_queue_push(tq, ws_task);
 
   _tinystm.task_queue_split_index++; // Update the next split index.
   PRINT_DEBUG("==> _tinystm.task_queue_split_index:[%lu]\n", _tinystm.task_queue_split_index);
-  PRINT_DEBUG("==> stm_task_split[tq:%p][index:%lu][size:%d]\n",tq, index, ((int)tq->_bottom - (int)tq->_top));
+  // PRINT_DEBUG("==> stm_task_split[tq:%p][index:%lu][size:%d]\n",tq, index, ((int)tq->_bottom - (int)tq->_top));
 }
 
 
 static INLINE void
-int_stm_task_queue_enqueue(stm_tx_t *t, ws_task* ws_task, int version)
+int_stm_task_queue_enqueue(stm_tx_t *t, hs_task_t* ws_task, int version)
 {
-  size_t num_task;
   
   //pthread_t this_thread_id = pthread_self();
   long tp = t->task_queue_position;
-  ws_task_queue* tq = _tinystm.task_queue_info[tp]->task_queue;
+  hs_task_queue_t* tq = _tinystm.task_queue_info[tp]->task_queue;
   //assert(_tinystm.task_queue_info[tp]->thread_id == this_thread_id);
-  ws_task_queue* tmp = _tinystm.task_queue_info[tp]->task_queue;
+  hs_task_queue_t* tmp = _tinystm.task_queue_info[tp]->task_queue;
   assert(tp != (-1));
 
   /* Check the task version is match to the task queue version. */
@@ -2019,24 +2199,21 @@ int_stm_task_queue_enqueue(stm_tx_t *t, ws_task* ws_task, int version)
   }
   /* There is no match task queue, create a new one. */
   if (tq == NULL) {
-    tq = ws_task_queue_new(version);
+    tq = hs_task_queue_new(version);
     tmp->next = tq;
   }
-  ws_task_queue_push(tq, ws_task, &num_task);
-  PRINT_DEBUG("==> stm_task_enqueue[%p][(%lu.%d), %ld]\n",t, tp, version,  num_task);
+  hs_task_queue_push(tq, ws_task);
+  // PRINT_DEBUG("==> stm_task_enqueue[%p][(%lu), %ld]\n",t, tp, version);
 }
 
-static INLINE ws_task*
+static INLINE hs_task_t*
 int_stm_task_queue_dequeue(stm_tx_t *t, int version)
 {
-  ws_task* task_ptr;
+  hs_task_t* task_ptr;
   long tp = t->task_queue_position;
-  long victim_nb;
-  int retry_time = 0;
-  size_t num_task;
   assert(tp != (-1));
 
-  ws_task_queue* tq = _tinystm.task_queue_info[tp]->task_queue;
+  hs_task_queue_t* tq = _tinystm.task_queue_info[tp]->task_queue;
 
   /* Check the task number. */
   while (tq != NULL) {
@@ -2370,11 +2547,9 @@ int_stm_coro_func_register(stm_tx_t *tx, void (*coro_func)(), void* coro_arg)
   // If in coroutine code -> not to register again.
   assert(coro_func != NULL);
   assert(coro_arg != NULL);
-  if (tx->is_co == 1) {
-    PRINT_DEBUG("Co: Not need to register coro function[%p]!!!\n", tx);
-    return;
-  }
 
+  /* CT_TABLE version */
+  tls_co_register(coro_func, coro_arg);
   tx->coro_func = coro_func;
   tx->coro_arg = coro_arg;
   PRINT_DEBUG("==>stm_coro_func_register[id:0x%12x][%p][fp=%p][arg=%p]\n",(unsigned int)pthread_self(), tx, tx->coro_func, tx->coro_arg);
@@ -2424,12 +2599,6 @@ int_stm_coro_CM(stm_tx_t *tx)
   
 }
 
-static INLINE int
-int_is_Main_coro(stm_tx_t* tx)
-{
-  // XOR to bit change
-  return (tx->is_co ^ 1);
-}
 
 static INLINE void*
 int_stm_get_coro_arg(stm_tx_t* tx)
@@ -2439,8 +2608,40 @@ int_stm_get_coro_arg(stm_tx_t* tx)
   return tx->coro_arg;
 }
 
-
 #endif /* CM == CM_COROUTINE */
+
+#ifdef CT_TABLE
+static INLINE void
+int_stm_coro_func_register(stm_tx_t *tx, void (*coro_func)(), void* coro_arg)
+{
+  // If in coroutine code -> not to register again.
+  assert(coro_func != NULL);
+  assert(coro_arg != NULL);
+
+  if (tls_get_isMain() == 0) return; /* Coroutine cannot register the coro function and arg*/
+  /* CT_TABLE version */
+  tls_co_register(coro_func, coro_arg);
+  PRINT_DEBUG("==>stm_coro_func_register[id:0x%12x][%p][fp=%p][arg=%p]\n",(unsigned int)pthread_self(), tx, tls_get_ctt()->coro_func, tls_get_ctt()->coro_arg);
+}
+
+static INLINE int
+int_stm_is_Main_coro(stm_tx_t *tx)
+{
+  return tls_get_isMain();
+}
+
+static INLINE void*
+int_stm_get_coro_arg(stm_tx_t* tx)
+{
+  if(tls_get_isMain()) return NULL;
+  return tls_get_coro_arg();
+}
+
+
+#endif /* CT_TABLE */
+
+
+
 
 #ifdef TM_STATISTICS
 # ifdef STAT_ACCUM
@@ -2448,6 +2649,7 @@ int_stm_get_coro_arg(stm_tx_t* tx)
 *  type: 0 nb_commit
 *        1 nb_abort
 */
+/* FIXME: mutex usage may decrease performance */
 static INLINE void
 int_stm_stat_accum(stm_tx_t* tx)
 {
@@ -2459,6 +2661,13 @@ int_stm_stat_accum(stm_tx_t* tx)
   _tinystm.to_nb_commits += commit;
   _tinystm.to_nb_aborts += abort;
   pthread_mutex_unlock(&_tinystm.quiesce_mutex);
+#ifdef CT_TABLE
+  // if (tls_get_isMain() == 0) {
+  //   printf("co[tx:%p] stat_accum[commits:%d][abort:%d]\n", tx, commit, abort);
+  // } else {
+  //   printf("main co[tx:%p] stat_accum[commits:%d][abort:%d]\n", tx, commit, abort);
+  // }
+#endif /* CT_TABLE */
   PRINT_DEBUG("==> stm_stat_accum[tx:%p][commits:%d][abort:%d]\n", tx, commit, abort);
 }
 
@@ -2501,16 +2710,23 @@ int_stm_print_stat(void)
   printf("          commit_rate:       %.6f\n", (double)_tinystm.to_nb_commits/((double)_tinystm.to_nb_commits+(double)_tinystm.to_nb_aborts));
   
 }
+
 # endif /* STAT_ACCUM */
 #endif /* TM_STATISTICS */
 
 
 
 
-#ifdef WORK_STEALING
+#ifdef CPT
+// TODO: HERE
+// static INLINE void
+// int_stm_cpt_init(stm_tx_t* tx)
 
 
-#endif /* WORK_STEALING */
+#endif /* CPT */
+
+
+
 
 
 

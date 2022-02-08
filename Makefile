@@ -80,6 +80,7 @@ DEFINES += -DCM=CM_SUICIDE
 # DEFINES += -DCM=CM_BACKOFF
 # DEFINES += -DCM=CM_MODULAR
 # DEFINES += -DCM=CM_COROUTINE
+DEFINES += -DCM=CM_SHADOWTASK
 
 ########################################################################
 # Enable irrevocable mode (required for using the library with a
@@ -135,8 +136,8 @@ DEFINES += -DUSE_BLOOM_FILTER
 # enabling this feature.
 ########################################################################
 
-# DEFINES += -DEPOCH_GC
-DEFINES += -UEPOCH_GC
+DEFINES += -DEPOCH_GC
+# DEFINES += -UEPOCH_GC
 
 ########################################################################
 # Keep track of conflicts between transactions and notifies the
@@ -145,8 +146,8 @@ DEFINES += -UEPOCH_GC
 # requires EPOCH_GC.
 ########################################################################
 
-# DEFINES += -DCONFLICT_TRACKING
-DEFINES += -UCONFLICT_TRACKING
+DEFINES += -DCONFLICT_TRACKING
+# DEFINES += -UCONFLICT_TRACKING
 
 ########################################################################
 # Allow transactions to read the previous version of locked memory
@@ -176,7 +177,7 @@ DEFINES += -ULOCK_IDX_SWAP
 # Output many (DEBUG) or even mode (DEBUG2) debugging messages.
 ########################################################################
 
-# DDEFINES += -DDEBUG
+# DEFINES += -DDEBUG
 DEFINES += -UDEBUG
 # DEFINES += -DDEBUG2
 DEFINES += -UDEBUG2
@@ -231,11 +232,38 @@ DEFINES += -DWORK_STEALING
 # DEFINES += -UWORK_STEALING
 
 ########################################################################
+# Enable conflict tracking table (ctt)
+########################################################################
+DEFINES += -DCT_TABLE
+# DEFINES += -UCT_TABLE
+
+########################################################################
+# Enable conflict probability table (cpt)
+########################################################################
+DEFINES += -DCPT
+# DEFINES += -UCPT
+
+########################################################################
+# Contention Intensity 
+########################################################################
+
+DEFINES += -DCONTENTION_INTENSITY
+# DEFINES += -UCONTENTION_INTENSITY
+
+########################################################################
+# Number each transaction with preprocessor (__COUNTER__) for conflict
+# recording
+########################################################################
+
+DEFINES += -DTX_NUMBERING
+# DEFINES += UTX_NUMBERING
+
+########################################################################
 # Show the total commit and abort transaction number at the end.
 ########################################################################
 
-DEFINES += -DSTAT_ACCUM
-# DEFINES += -USTAT_ACCUM
+# DEFINES += -DSTAT_ACCUM
+DEFINES += -USTAT_ACCUM
 
 
 ########################################################################

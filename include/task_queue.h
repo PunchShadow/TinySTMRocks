@@ -17,6 +17,9 @@ extern "C" {
 
 typedef struct ws_task_queue ws_task_queue;
 
+typedef struct hs_task hs_task_t;
+typedef struct hs_task_queue hs_task_queue_t;
+
 
 
 typedef struct ws_task {
@@ -45,6 +48,90 @@ typedef struct ws_task_queue {
     int taskNum;
     ws_task_queue* next;
 } ws_task_queue;
+
+
+typedef struct hs_task {
+    long start;
+    long end;
+    void* data;
+    hs_task_t* next;
+    hs_task_t* prev;
+} hs_task_t;
+
+
+typedef struct hs_task_queue {
+    hs_task_t* top;
+    hs_task_t* bottom;
+    int taskNum;
+    hs_task_queue_t* next;
+} hs_task_queue_t;
+
+
+static inline hs_task_t*
+hs_task_create(long start, long stop, void* data)
+{
+    hs_task_t* taskPtr;
+    taskPtr = malloc(sizeof(hs_task_t));
+    taskPtr->start = start;
+    taskPtr->end = stop;
+    taskPtr->data = data;
+    taskPtr->next = NULL;
+    taskPtr->prev = NULL;
+    return taskPtr;
+}
+
+static inline hs_task_queue_t*
+hs_task_queue_new(int version)
+{
+    hs_task_queue_t* tq;
+    tq = malloc(sizeof(hs_task_queue_t));
+    tq->top = NULL;
+    tq->bottom = NULL;
+    tq->taskNum = version;
+    tq->next = NULL;
+    return tq;
+}
+
+static inline void
+hs_task_queue_delete(hs_task_queue_t* tq)
+{
+    hs_task_t* taskPtr = tq->bottom;
+    while(taskPtr != NULL) {
+        hs_task_t* cur = taskPtr;
+        taskPtr = taskPtr->next;
+        free(cur);
+    }
+    free(tq);
+}
+
+static inline void
+hs_task_queue_push(hs_task_queue_t* tq, hs_task_t* taskPtr)
+{
+    hs_task_t* prev_top = tq->top;
+    hs_task_t* prev_bottom = tq->bottom;
+    if (prev_top == NULL) {
+        tq->top = taskPtr;
+        tq->bottom = taskPtr;
+    }
+    else {
+        if (prev_bottom == NULL) tq->bottom = taskPtr;
+        taskPtr->prev = prev_top;
+        prev_top->next = taskPtr;
+        tq->top = taskPtr;
+    }
+}
+
+static inline hs_task_t*
+hs_task_queue_pop(hs_task_queue_t* tq)
+{
+    hs_task_t* res = tq->bottom;
+    if (res == NULL) return res;
+    else {
+        tq->bottom = res->next;
+        return res;
+    }
+}
+
 
 
 

@@ -13,36 +13,28 @@
 
 
 
-ws_task_queue* 
-mod_dp_task_queue_init(void)
+hs_task_queue_t* 
+mod_dp_task_queue_init(int version)
 {
-    ws_task_queue* ws_tq;
-    ws_tq = ws_task_queue_new(0);
-    return ws_tq;
+    hs_task_queue_t* tq;
+    tq = hs_task_queue_new(version);
+    return tq;
 }
 
 static inline void
-mod_dp_task_queue_delete(ws_task_queue* ws_tq)
+mod_dp_task_queue_delete(hs_task_queue_t* tq)
 {
-    ws_task_queue_delete(ws_tq);
+    hs_task_queue_delete(tq);
 }
 
 
-ws_task* 
-mod_dp_ws_task_create(long start, long end, void* data)
+hs_task_t* 
+mod_dp_hs_task_create(long start, long end, void* data)
 {
-    ws_task* task_ptr;
-    task_ptr = malloc(sizeof(ws_task));
-    task_ptr->start = start;
-    task_ptr->end = end;
-    task_ptr->data = data;
+    hs_task_t* taskPtr;
+    taskPtr = hs_task_create(start, end, data);
 
-    return task_ptr;
+    return taskPtr;
 }
 
-void
-mod_dp_ws_task_delete(ws_task* task_ptr)
-{
-    free(task_ptr);
-}
 

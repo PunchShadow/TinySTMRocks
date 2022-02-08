@@ -39,6 +39,8 @@
 #include "gc.h"
 #include "helper_thread.h" // Helper_thread
 #include "task_queue.h" // Work-stealing
+#include "conflict_tracking_table.h" // CT_TABLE
+#include "conflict_probability_table.h" /* CPT */
 
 /* ################################################################### *
  * DEFINES
@@ -56,7 +58,9 @@ static const char *cm_names[] = {
   /* 0 */ "SUICIDE",
   /* 1 */ "DELAY",
   /* 2 */ "BACKOFF",
-  /* 3 */ "MODULAR"
+  /* 3 */ "MODULAR",
+  /* 4 */ "COROUTINE",
+  /* 5 */ "SHADOWTASK"
 };
 
 /* Global variables */
@@ -130,7 +134,23 @@ __thread unsigned int nb_abort = 0;
 __thread stm_tx_t* thread_shadow_tx = NULL;
 __thread int is_co = 0;
 #endif /* CM == CM_COROUTINE */
+#ifdef CT_TABLE
+__thread ctt_t* ct_table = NULL;
+__thread int romeo_init = 0;
+#endif /* CT_TABLE */
+#ifdef CPT
+__thread cpt_node_t** cp_table = NULL;
+__thread int cpt_size = 0;
+__thread int nb_commits = 0;
+__thread int nb_aborts = 0;
+__thread float cpt_evap = 0;
+#endif /* CPT */
+#ifdef CONTENTION_INTENSITY
+__thread float tls_ci = 0;
+__thread float tls_alpha = 0;
+#endif /* CONTENTION_INTENSITY */
 #endif /* defined(TLS_COMPILER) */
+
 
 /* ################################################################### *
  * STATIC
@@ -290,7 +310,10 @@ stm_init(void)
   stm_quiesce_init();
 
   tls_init();
-
+#ifdef CPT
+  // FIXME: use gcpt, and first get the know of how many tranasction a task has.
+  // _tinystm.gcpt = gcpt_init(???);
+#endif /* CPT */
 
 #ifdef SIGNAL_HANDLER
   if (getenv(NO_SIGNAL_HANDLER) == NULL) {
@@ -341,9 +364,13 @@ stm_exit(void)
  * Called by the CURRENT thread to initialize thread-local STM data.
  */
 _CALLCONV stm_tx_t *
-stm_init_thread(void)
+stm_init_thread(int max_tx)
 {
+#ifdef CT_TABLE
+  return int_stm_init_thread(max_tx);
+#else /* !CT_TABLE */
   return int_stm_init_thread();
+#endif /* !CT_TABLE */
 }
 
 /*
@@ -366,16 +393,28 @@ stm_exit_thread_tx(stm_tx_t *tx)
  * Called by the CURRENT thread to start a transaction.
  */
 _CALLCONV sigjmp_buf *
-stm_start(stm_tx_attr_t attr)
+stm_start(stm_tx_attr_t attr, int numbering)
 {
   TX_GET;
+#ifdef CT_TABLE
+  return int_stm_start(tx, attr, numbering);
+#else /* !CT_TABLE */
   return int_stm_start(tx, attr);
+#endif /* CT_TABLE */
 }
 
 _CALLCONV sigjmp_buf *
+#ifdef CT_TABLE
+stm_start_tx(stm_tx_t *tx, stm_tx_attr_t attr, int numbering)
+#else /* !CT_TABLE */
 stm_start_tx(stm_tx_t *tx, stm_tx_attr_t attr)
+#endif /* CT_TABLE */
 {
+#ifdef CT_TABLE
+  return int_stm_start(tx, attr, numbering);
+#else /* !CT_TABLE */
   return int_stm_start(tx, attr);
+#endif /* CT_TABLE */
 }
 
 /*
@@ -916,7 +955,11 @@ stm_get_clock(void)
 _CALLCONV stm_tx_t *
 stm_current_tx(void)
 {
+#ifdef CT_TABLE 
+  return tls_get_tx(0);
+#else /* !CT_TABLE */
   return tls_get_tx();
+#endif /* CT_TABLE */
 }
 
 /* ################################################################### *
@@ -1146,7 +1189,7 @@ stm_task_queue_partition(long min, long max, long stride)
   // Wrap regions to tasks and push tasks into task queue.
   for (long i = start; i < stop; i += (stride)) {
     long end  = MIN(stop, (i + stride));
-    ws_task* task_ptr = ws_task_create(i, end, NULL);
+    hs_task_t* task_ptr = hs_task_create(i, end, NULL);
     PRINT_DEBUG("==> TM_PARTITION[%lu](%lu, %lu)\n", position, i, end);
     int_stm_task_queue_enqueue(tx, task_ptr, 0);
   }
@@ -1157,7 +1200,7 @@ _CALLCONV void
 stm_task_queue_get(long* startPtr, long* stopPtr)
 { 
   TX_GET;
-  ws_task* task_ptr;
+  hs_task_t* task_ptr;
   task_ptr = int_stm_task_queue_dequeue(tx, 0);
   // Normal execution
   if (task_ptr != NULL) {
@@ -1180,22 +1223,24 @@ _CALLCONV void
 stm_TaskPush(void* data, int ver)
 {
   TX_GET;
-  ws_task* taskPtr = gws_task_create(data);
+  hs_task_t* taskPtr = hs_task_create(-1,-1,data);
   //PRINT_DEBUG("==> stm_TaskPush[%lu] ver: %d\n", tx->task_queue_position, ver);
   int_stm_task_queue_enqueue(tx, taskPtr, ver);
 }
 
+/* Pop the whole taskPtr */
 _CALLCONV void*
 stm_TaskPop(int ver)
 {
   TX_GET;
-  ws_task* taskPtr;
+  hs_task_t* taskPtr;
   //PRINT_DEBUG("==> stm_TaskPop[%lu] ver: %d\n", tx->task_queue_position, ver);
   taskPtr = int_stm_task_queue_dequeue(tx, ver);
   if (taskPtr == NULL) return NULL;
   return taskPtr;
 }
 
+/* Pop the data insert with TaskPop*/
 _CALLCONV void*
 stm_TaskPopRaw(int ver)
 {
@@ -1219,9 +1264,12 @@ stm_Loop2Task(long min, long max, long stride, int ver, void* data)
     return;
   }
 #endif /* CM == CM_COROUTINE */
+#ifdef CT_TABLE
+  if (tx->max_tx != 0) if (!tls_get_isMain()) return; /* coroutine function does not need to push tasks. */
+#endif /* CT_TABLE */
   for (long start = min; start < max; start += stride) {
     long end = MIN(max, (start+stride));
-    ws_task* taskPtr = ws_task_create(start, end, data);
+    hs_task_t* taskPtr = hs_task_create(start, end, data);
     int_stm_task_queue_enqueue(tx, taskPtr, ver);
     taskPtr = NULL;
   }
@@ -1230,9 +1278,10 @@ stm_Loop2Task(long min, long max, long stride, int ver, void* data)
 _CALLCONV void
 stm_TaskSplit(void* data, int ver)
 {
-  ws_task* taskPtr = gws_task_create(data);
+  hs_task_t* taskPtr = hs_task_create(-1,-1,data);
   int_stm_task_queue_split(taskPtr, ver);
 }
+
 
 
 #if CM == CM_COROUTINE
@@ -1252,13 +1301,7 @@ stm_isMain_coro()
   return int_is_Main_coro(tx);
 }
 
-/* Specify coroutine function and its argrument with corresponding task version*/
-_CALLCONV void
-stm_coroutine_register(void (*func)(), void* arg)
-{
-  TX_GET;
-  int_stm_coro_func_register(tx, func, arg);
-}
+
 
 _CALLCONV void*
 stm_get_coro_arg()
@@ -1279,7 +1322,30 @@ stm_probe()
 }
 
 
-#ifdef WORK_STEALING
+#ifdef CT_TABLE
+/* Specify coroutine function and its argrument with corresponding task version*/
+_CALLCONV void
+stm_coroutine_register(void (*func)(), void* arg)
+{
+  TX_GET;
+  int_stm_coro_func_register(tx, func, arg);
+}
 
-#endif /* WORK_STEALING */
+_CALLCONV int
+stm_isMain_coro()
+{
+  TX_GET;
+  return int_stm_is_Main_coro(tx);
+}
+
+_CALLCONV void*
+stm_get_coro_arg()
+{
+  TX_GET;
+  return int_stm_get_coro_arg(tx);
+}
+
+
+
+#endif /* CT_TABLE */
 

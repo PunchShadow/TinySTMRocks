@@ -80,6 +80,7 @@
 # include <stdio.h>
 # include <stdlib.h>
 
+
 /**
  * Version string
  */
@@ -286,7 +287,7 @@ void stm_exit(void) _CALLCONV;
  * from each thread that performs transactional operations, before the
  * thread calls any other functions of the library.
  */
-struct stm_tx *stm_init_thread(void) _CALLCONV;
+struct stm_tx *stm_init_thread(int max_tx) _CALLCONV;
 
 //@{
 /**
@@ -313,8 +314,8 @@ void stm_exit_thread_tx(struct stm_tx *tx) _CALLCONV;
  *   sigsetjmp() as an abort will restart the top-level transaction
  *   (flat nesting).
  */
-sigjmp_buf *stm_start(stm_tx_attr_t attr) _CALLCONV;
-sigjmp_buf *stm_start_tx(struct stm_tx *tx, stm_tx_attr_t attr) _CALLCONV;
+sigjmp_buf *stm_start(stm_tx_attr_t attr, int numbering) _CALLCONV;
+sigjmp_buf *stm_start_tx(struct stm_tx *tx, stm_tx_attr_t attr, int numbering) _CALLCONV;
 //@}
 
 //@{
@@ -744,10 +745,13 @@ void stm_TaskSplit(void* taskPtr, int ver) _CALLCONV;
  * @param ver
  *    Task version assigned by programmer
  * @return
+ *    stm_TaskPop(): whole taskPtr
+ *    stm_TaskPopRaw(): taskPtr->data
  *    Void pointer to the object of task pushed with stm_TaskPush(ver).
 */
 void* stm_TaskPop(int ver) _CALLCONV;
 void* stm_TaskPopRaw(int ver) _CALLCONV;
+
 /**
  * Tranfer loop to separate ws_tasks with given version and verbosed data.
  * A ws_task object contains start, end and data attributes to cut
@@ -786,6 +790,15 @@ void* stm_get_coro_arg(void) _CALLCONV;
 void* stm_probe(void) _CALLCONV;
 
 void stm_task_exit(void) _CALLCONV;
+
+
+/* ################################################################### *
+ * CT_TABLE
+ * ################################################################### */
+
+// void stm_ctt_init(int thread_num) _CALLCONV;
+// void stm_ctt_exit(void) _CALLCONV;
+
 
 
 #ifdef __cplusplus
