@@ -13,26 +13,26 @@
 
 
 
-hs_task_queue_t* 
+ws_task_queue* 
 mod_dp_task_queue_init(int version)
 {
-    hs_task_queue_t* tq;
-    tq = hs_task_queue_new(version);
+    ws_task_queue* tq;
+    tq = ws_task_queue_new(version);
     return tq;
 }
 
 static inline void
-mod_dp_task_queue_delete(hs_task_queue_t* tq)
+mod_dp_task_queue_delete(ws_task_queue* tq)
 {
-    hs_task_queue_delete(tq);
+    ws_task_queue_delete(tq);
 }
 
 
-hs_task_t* 
-mod_dp_hs_task_create(long start, long end, void* data)
+ws_task* 
+mod_dp_ws_task_create(long start, long end, void* data)
 {
-    hs_task_t* taskPtr;
-    taskPtr = hs_task_create(start, end, data);
+    ws_task* taskPtr;
+    taskPtr = ws_task_create(start, end, data);
 
     return taskPtr;
 }

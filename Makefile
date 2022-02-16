@@ -75,7 +75,7 @@ DEFINES += -DDESIGN=WRITE_BACK_ETL
 ########################################################################
 
 # Pick one contention manager (CM)
-DEFINES += -DCM=CM_SUICIDE
+# DEFINES += -DCM=CM_SUICIDE
 # DEFINES += -DCM=CM_DELAY
 # DEFINES += -DCM=CM_BACKOFF
 # DEFINES += -DCM=CM_MODULAR
@@ -262,8 +262,15 @@ DEFINES += -DTX_NUMBERING
 # Show the total commit and abort transaction number at the end.
 ########################################################################
 
-# DEFINES += -DSTAT_ACCUM
-DEFINES += -USTAT_ACCUM
+DEFINES += -DSTAT_ACCUM
+# DEFINES += -USTAT_ACCUM
+
+########################################################################
+# Debug flag for CT_TABLE
+########################################################################
+
+# DEFINES += -DCTT_DEBUG
+DEFINES += -UCTT_DEBUG
 
 
 ########################################################################

@@ -137,6 +137,7 @@ __thread int is_co = 0;
 #ifdef CT_TABLE
 __thread ctt_t* ct_table = NULL;
 __thread int romeo_init = 0;
+__thread void* tls_func_gc_tx = NULL;
 #endif /* CT_TABLE */
 #ifdef CPT
 __thread cpt_node_t** cp_table = NULL;
@@ -149,6 +150,12 @@ __thread float cpt_evap = 0;
 __thread float tls_ci = 0;
 __thread float tls_alpha = 0;
 #endif /* CONTENTION_INTENSITY */
+#ifdef CTT_DEBUG
+__thread int switch_time = 0;
+__thread int success_switch = 0;
+__thread int nb_co_create = 0;
+__thread int nb_co_finish = 0;
+#endif /* CTT_DEBUG */
 #endif /* defined(TLS_COMPILER) */
 
 
@@ -1189,7 +1196,7 @@ stm_task_queue_partition(long min, long max, long stride)
   // Wrap regions to tasks and push tasks into task queue.
   for (long i = start; i < stop; i += (stride)) {
     long end  = MIN(stop, (i + stride));
-    hs_task_t* task_ptr = hs_task_create(i, end, NULL);
+    ws_task* task_ptr = ws_task_create(i, end, NULL);
     PRINT_DEBUG("==> TM_PARTITION[%lu](%lu, %lu)\n", position, i, end);
     int_stm_task_queue_enqueue(tx, task_ptr, 0);
   }
@@ -1200,7 +1207,7 @@ _CALLCONV void
 stm_task_queue_get(long* startPtr, long* stopPtr)
 { 
   TX_GET;
-  hs_task_t* task_ptr;
+  ws_task* task_ptr;
   task_ptr = int_stm_task_queue_dequeue(tx, 0);
   // Normal execution
   if (task_ptr != NULL) {
@@ -1223,7 +1230,7 @@ _CALLCONV void
 stm_TaskPush(void* data, int ver)
 {
   TX_GET;
-  hs_task_t* taskPtr = hs_task_create(-1,-1,data);
+  ws_task* taskPtr = ws_task_create(-1,-1,data);
   //PRINT_DEBUG("==> stm_TaskPush[%lu] ver: %d\n", tx->task_queue_position, ver);
   int_stm_task_queue_enqueue(tx, taskPtr, ver);
 }
@@ -1233,7 +1240,7 @@ _CALLCONV void*
 stm_TaskPop(int ver)
 {
   TX_GET;
-  hs_task_t* taskPtr;
+  ws_task* taskPtr;
   //PRINT_DEBUG("==> stm_TaskPop[%lu] ver: %d\n", tx->task_queue_position, ver);
   taskPtr = int_stm_task_queue_dequeue(tx, ver);
   if (taskPtr == NULL) return NULL;
@@ -1269,7 +1276,7 @@ stm_Loop2Task(long min, long max, long stride, int ver, void* data)
 #endif /* CT_TABLE */
   for (long start = min; start < max; start += stride) {
     long end = MIN(max, (start+stride));
-    hs_task_t* taskPtr = hs_task_create(start, end, data);
+    ws_task* taskPtr = ws_task_create(start, end, data);
     int_stm_task_queue_enqueue(tx, taskPtr, ver);
     taskPtr = NULL;
   }
@@ -1278,7 +1285,7 @@ stm_Loop2Task(long min, long max, long stride, int ver, void* data)
 _CALLCONV void
 stm_TaskSplit(void* data, int ver)
 {
-  hs_task_t* taskPtr = hs_task_create(-1,-1,data);
+  ws_task* taskPtr = ws_task_create(-1,-1,data);
   int_stm_task_queue_split(taskPtr, ver);
 }
 
