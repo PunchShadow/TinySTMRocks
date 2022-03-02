@@ -138,6 +138,7 @@ __thread int is_co = 0;
 __thread ctt_t* ct_table = NULL;
 __thread int romeo_init = 0;
 __thread void* tls_func_gc_tx = NULL;
+__thread int cur_region_number = 0;
 #endif /* CT_TABLE */
 #ifdef CPT
 __thread cpt_node_t** cp_table = NULL;
@@ -155,6 +156,7 @@ __thread int switch_time = 0;
 __thread int success_switch = 0;
 __thread int nb_co_create = 0;
 __thread int nb_co_finish = 0;
+__thread int nb_contention_detect = 0;
 #endif /* CTT_DEBUG */
 #endif /* defined(TLS_COMPILER) */
 
@@ -371,10 +373,10 @@ stm_exit(void)
  * Called by the CURRENT thread to initialize thread-local STM data.
  */
 _CALLCONV stm_tx_t *
-stm_init_thread(int max_tx)
+stm_init_thread(int max_tx, int open, int number)
 {
 #ifdef CT_TABLE
-  return int_stm_init_thread(max_tx);
+  return int_stm_init_thread(max_tx, open, number);
 #else /* !CT_TABLE */
   return int_stm_init_thread();
 #endif /* !CT_TABLE */

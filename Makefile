@@ -262,8 +262,8 @@ DEFINES += -DTX_NUMBERING
 # Show the total commit and abort transaction number at the end.
 ########################################################################
 
-DEFINES += -DSTAT_ACCUM
-# DEFINES += -USTAT_ACCUM
+# DEFINES += -DSTAT_ACCUM
+DEFINES += -USTAT_ACCUM
 
 ########################################################################
 # Debug flag for CT_TABLE

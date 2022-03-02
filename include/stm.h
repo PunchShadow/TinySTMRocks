@@ -287,7 +287,7 @@ void stm_exit(void) _CALLCONV;
  * from each thread that performs transactional operations, before the
  * thread calls any other functions of the library.
  */
-struct stm_tx *stm_init_thread(int max_tx) _CALLCONV;
+struct stm_tx *stm_init_thread(int max_tx, int use_ctt, int num_region) _CALLCONV;
 
 //@{
 /**

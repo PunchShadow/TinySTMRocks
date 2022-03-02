@@ -451,7 +451,7 @@
 /**/
 // #      define TM_THREAD_ENTER()         stm_init_thread()
 /* TX_NUMBERING & CT_TABLE */
-#      define TM_THREAD_ENTER(num_tx)   stm_init_thread(num_tx)
+#      define TM_THREAD_ENTER(num_tx, open)   stm_init_thread(num_tx, open, __COUNTER__)
 
 
 /* Jump to TM_PARTITION() and restart the task */

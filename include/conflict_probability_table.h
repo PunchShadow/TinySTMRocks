@@ -10,7 +10,6 @@ extern "C" {
 #include <pthread.h>
 #include <time.h>
 #include <assert.h>
-// #include "conflict_tracking_table.h"
 
 #define QUANTITY               1
 
