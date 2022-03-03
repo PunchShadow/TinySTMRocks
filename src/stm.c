@@ -157,6 +157,9 @@ __thread int success_switch = 0;
 __thread int nb_co_create = 0;
 __thread int nb_co_finish = 0;
 __thread int nb_contention_detect = 0;
+__thread int commit_after_switch = 0;
+__thread int switch_flag = 0;
+__thread float predict_score = 0;
 #endif /* CTT_DEBUG */
 #endif /* defined(TLS_COMPILER) */
 

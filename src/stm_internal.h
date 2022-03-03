@@ -468,6 +468,7 @@ typedef struct {
   int to_co_create;
   int to_co_finish;
   int to_contention_detect;
+  float to_predict_score;
 #endif /* CTT_DEBUG */
 
   /* At least twice a cache line (256 bytes to be on the safe side) */
@@ -580,6 +581,7 @@ stm_quiesce_init(void)
   _tinystm.to_co_create = 0;
   _tinystm.to_co_finish = 0;
   _tinystm.to_contention_detect = 0;
+  _tinystm.to_predict_score = 0;
 #endif /* CTT_DEBUG */
 }
 
@@ -2652,11 +2654,13 @@ int_stm_stat_accum(stm_tx_t* tx)
   int nb_co_create = 0;
   int nb_co_finish = 0;
   int nb_contention_detect = 0;
+  float predict_score = 0;
   tls_get_stats("switch_time", &switch_time);
   tls_get_stats("success_swtich", &success_switch);
   tls_get_stats("nb_co_create", &nb_co_create);
   tls_get_stats("nb_co_finish", &nb_co_finish);
   tls_get_stats("nb_contention_detect", &nb_contention_detect);
+  tls_get_stats("predict_score", &predict_score);
 #endif /* CTT_DEBUG */
   pthread_mutex_lock(&_tinystm.quiesce_mutex);
   _tinystm.to_nb_commits += commit;
@@ -2667,6 +2671,7 @@ int_stm_stat_accum(stm_tx_t* tx)
   _tinystm.to_co_create += nb_co_create;
   _tinystm.to_co_finish += nb_co_finish;
   _tinystm.to_contention_detect += nb_contention_detect;
+  _tinystm.to_predict_score += predict_score;
 #endif /* CTT_DEBUG */
   pthread_mutex_unlock(&_tinystm.quiesce_mutex);
 
@@ -2691,6 +2696,7 @@ int_stm_print_stat(void)
   printf("          total_co_switch:  %d\n", _tinystm.to_nb_switch);
   printf("          total_co_success: %d\n", _tinystm.to_success_switch);
   printf("          total_content:    %d\n", _tinystm.to_contention_detect);
+  printf("          total_predict:    %f\n", _tinystm.to_predict_score);
 # endif /* CTT_DEBUG */
 }
 

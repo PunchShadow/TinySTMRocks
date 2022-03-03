@@ -173,6 +173,9 @@ extern __thread int success_switch;
 extern __thread int nb_co_create;
 extern __thread int nb_co_finish;
 extern __thread int nb_contention_detect;
+extern __thread int commit_after_switch;
+extern __thread int switch_flag;
+extern __thread float predict_score;
 
 static INLINE int
 tls_get_stats(const char *name, void *val)
@@ -209,6 +212,12 @@ tls_get_stats(const char *name, void *val)
     return 1;
   }
 
+  if (strcmp("predict_score", name) == 0) {
+    *(float*)val = predict_score;
+    predict_score = 0;
+    return 1;
+  }
+
   return 0;
 }
 
@@ -227,6 +236,9 @@ tls_on_commit()
 #ifdef CONTENTION_INTENSITY
   tls_ci = (tls_ci)*(tls_alpha) + (1-tls_alpha);
 #endif /* CONTNETION_INTENSITY */
+#ifdef CTT_DEBUG
+  if (switch_flag) commit_after_switch++;
+#endif /* CTT_DEBUG */
 }
 
 static INLINE void
@@ -239,6 +251,13 @@ tls_on_abort()
 #ifdef CONTENTION_INTENSITY
   tls_ci = (tls_ci)*(tls_alpha);
 #endif /* CONTNETION_INTENSITY */
+#ifdef CTT_DEBUG
+  if (switch_flag) {
+    predict_score += commit_after_switch;
+    commit_after_switch = 0;
+  }
+  switch_flag = 0;
+#endif /* CTT_DEBUG */
 }
 
 
@@ -480,11 +499,17 @@ tls_random_select(int cur_state, int nb_state)
 static ctt_node_t*
 tls_task_selector(int prev_state)
 {
+  /* FIXME: If contention is detected, we must swtich to another task, except the state is 0.*/
   /* ACO prediction */
-  // int candidate = cpt_predict(cp_table, cpt_size, ct_table->state, ct_table);
-  // if (candidate == prev_state) return NULL;
-  /* Random selection */
+#if SCHEDULE_POLICY == 1
+  int candidate = cpt_predict(cp_table, cpt_size, ct_table->state, ct_table);
+#else
   int candidate = tls_random_select(prev_state, ct_table->size);
+#endif /* SCHEDUL_POLICY */
+  // if (candidate == prev_state) return NULL;
+  
+  /* Random selection */
+  // int candidate = tls_random_select(prev_state, ct_table->size);
   // printf("ca:%d\n", candidate);
   return ctt_request(ct_table, candidate);
 }
@@ -537,6 +562,7 @@ tls_scheduler(int condition)
         assert(node->co != NULL);
 # ifdef CTT_DEBUG
         switch_time++;
+        switch_flag = 1;
 # endif /* CTT_DEBUG */
         aco_resume(node->co);
         /* yield back from co */
@@ -554,6 +580,7 @@ tls_scheduler(int condition)
         ctt_finishNode(ct_table, ct_table->cur_node);
 # ifdef CTT_DEBUG
         nb_co_finish++;
+        switch_flag = 0;
 # endif /* CTT_DEBUG */
         /* Yield to main co */
         ct_table->isMainCo = 1;
@@ -582,6 +609,7 @@ tls_scheduler(int condition)
           assert(ct_table->cur_node->co);
 # ifdef CTT_DEBUG
           switch_time++;
+          switch_flag = 1;
 # endif /* CTT_DEBUG */
           aco_resume(ct_table->cur_node->co);
           /* aco_yield back to main */
@@ -617,6 +645,7 @@ tls_scheduler(int condition)
           ct_table->cur_node = ct_table->main_node;
 # ifdef CTT_DEBUG
           switch_time++;
+          switch_flag = 1;
 # endif /* CTT_DEBUG */
           aco_yield(); 
           /* Yield back from main task, all info is set by main co with cur_node. */
