@@ -1997,7 +1997,7 @@ static INLINE void
 int_stm_task_queue_init(long numThread)
 {
   
-  _tinystm.task_queue_retry_time = 30; // The retry time to steal task
+  _tinystm.task_queue_retry_time = WS_RETRY_TIME; // The retry time to steal task
   _tinystm.task_queue_split_index = -1; // Initalize the split index
   // pthread_mutex_lock(&_tinystm.taskqueue_mutex);
   _tinystm.task_queue_info = malloc(sizeof(thread_task_queue_info*) * numThread );
